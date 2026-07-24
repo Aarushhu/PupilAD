@@ -353,7 +353,6 @@ def main():
         core.wait(2.0)
 
         # Save behavioral results (accuracy/RT) separately from pupillometry
-        data.ListWidget  # (placeholder to remind: use psychopy.data or pandas to save results)
         import pandas as pd
         pd.DataFrame(nback_results).to_csv(f"{OUTPUT_DIR}/{subject_id}_nback.csv", index=False)
         pd.DataFrame(digit_span_results).to_csv(f"{OUTPUT_DIR}/{subject_id}_digitspan.csv", index=False)
