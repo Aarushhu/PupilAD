@@ -7,12 +7,13 @@ import pandas as pd
 
 from pupilad.paths import DS003838_RAW, DS003838_SLIM
 
+DS003838_PARTIAL = DS003838_SLIM.parent / "partial_downloads"
 BUCKET_URL = "https://s3.amazonaws.com/openneuro.org/ds003838"
 SUBJECTS_WITHOUT_PUPIL = {"sub-017", "sub-094"}
 DOWNLOAD_ATTEMPTS = 3
 SLIM_COLUMNS = ["t", "eye", "conf", "diam", "blink"]
 PUPIL_3D_ROWS_AWK = (
-    'NR==1{next} $37=="pupil" && $8=="3d c++" ' '{print $1"\\t"$3"\\t"$4"\\t"$14"\\t"$36}'
+    'NR==1{next} $37=="pupil" && $8=="3d c++" {print $1"\\t"$3"\\t"$4"\\t"$14"\\t"$36}'
 )
 
 
@@ -35,20 +36,35 @@ def list_subjects():
     ]
 
 
-def stream_pupil_samples(subject):
+def fetch_raw_pupil_file(subject):
+    destination = DS003838_PARTIAL / f"{subject}_task-memory_pupil.tsv"
+    destination.parent.mkdir(parents=True, exist_ok=True)
     url = f"{BUCKET_URL}/{subject}/pupil/{subject}_task-memory_pupil.tsv"
-    curl = subprocess.Popen(["curl", "-sfL", url], stdout=subprocess.PIPE)
-    filtered = subprocess.run(
-        ["awk", "-F\t", PUPIL_3D_ROWS_AWK],
-        stdin=curl.stdout,
+    subprocess.run(
+        [
+            "curl",
+            "-sfL",
+            "-C",
+            "-",
+            "--retry",
+            "20",
+            "--retry-all-errors",
+            "-o",
+            str(destination),
+            url,
+        ],
+        check=True,
+    )
+    return destination
+
+
+def filter_pupil_samples(raw_path):
+    return subprocess.run(
+        ["awk", "-F\t", PUPIL_3D_ROWS_AWK, str(raw_path)],
         capture_output=True,
         text=True,
         check=True,
-    )
-    curl.stdout.close()
-    if curl.wait() != 0:
-        raise RuntimeError(f"download failed for {subject}")
-    return filtered.stdout
+    ).stdout
 
 
 def parse_slim_samples(tsv_text):
@@ -81,10 +97,12 @@ def download_subject(subject):
     if slim_path.exists():
         return subject, "cached"
     slim_path.parent.mkdir(parents=True, exist_ok=True)
-    samples = parse_slim_samples(stream_pupil_samples(subject))
+    raw_path = fetch_raw_pupil_file(subject)
+    samples = parse_slim_samples(filter_pupil_samples(raw_path))
     partial_path = slim_path.with_suffix(".partial")
     samples.to_parquet(partial_path, index=False)
     partial_path.rename(slim_path)
+    raw_path.unlink()
     return subject, f"{len(samples)} samples"
 
 
