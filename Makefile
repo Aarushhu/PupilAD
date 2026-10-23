@@ -1,5 +1,5 @@
 PYTHON ?= .venv/bin/python
-PUPILAD = $(PYTHON) -m pupilad
+PUPILAD = PYTHONPATH=src $(PYTHON) -m pupilad
 
 .PHONY: install download preprocess features validate train all test format
 
