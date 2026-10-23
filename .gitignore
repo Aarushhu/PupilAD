@@ -1,9 +1,13 @@
 data/
-*.csv
 *.rda
 *.pyc
 __pycache__/
 .DS_Store
-*.ipynb_checkpoints
+.ipynb_checkpoints/
 .venv/
 .venv-psychopy/
+*.egg-info/
+.pytest_cache/
+extracted_features.csv
+pupilad_features.csv
+pupilad_plr_features.csv

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pupilad"
+version = "0.2.0"
+description = "Task-evoked pupillometry pipeline for cognitive-load measurement (ISEF 2027 project)"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+
+[project.scripts]
+pupilad = "pupilad.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"pupilad.webcam" = ["column_map.json"]
+
+[tool.black]
+line-length = 100
+
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["pupilad"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
