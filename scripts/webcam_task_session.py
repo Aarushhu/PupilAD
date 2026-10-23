@@ -1,277 +1,195 @@
+import random
+import time
+
 import cv2
 import numpy as np
 import pandas as pd
-import time
-import random
 
-eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+from pupilad.paths import DATA_DIR
+from pupilad.webcam.pupil_detector import detect_pupil_diameter_px
 
-def detect_pupil(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    faces = face_cascade.detectMultiScale(gray, 1.3, 5, minSize=(100,100))
-    pupils = []
-    for (fx, fy, fw, fh) in faces:
-        roi_gray = gray[fy:fy+fh, fx:fx+fw]
-        eyes = eye_cascade.detectMultiScale(roi_gray, 1.1, 5)
-        for (ex, ey, ew, eh) in eyes:
-            eye_roi = roi_gray[ey:ey+eh, ex:ex+ew]
-            _, thresh = cv2.threshold(eye_roi, 30, 255, cv2.THRESH_BINARY_INV)
-            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if contours:
-                largest = max(contours, key=cv2.contourArea)
-                area = cv2.contourArea(largest)
-                if area > 20:
-                    diameter = 2 * np.sqrt(area / np.pi)
-                    pupils.append(diameter)
-    return np.mean(pupils) if pupils else None
+TASK_DURATION_S = 90
+LEAD_IN_S = 2
+PANEL_SHAPE = (400, 700, 3)
+PREVIEW_SIZE = (233, 175)
+PREVIEW_SLOT = (slice(210, 385), slice(460, 693))
+OUTPUT_DIR = DATA_DIR / "webcam_pilot"
+FONT = cv2.FONT_HERSHEY_SIMPLEX
+QUIT_KEY = ord("q")
 
-# ── Task generators ──────────────────────────────────────────
+NBACK_LETTERS = "BCDFGHJKLMNPQRSTVWXYZ"
+NBACK_LENGTH = 60
+NBACK_INTERVAL_S = 2.0
+DIGIT_INTERVAL_S = 1.0
+RECALL_DURATION_S = 5.0
+STROOP_INTERVAL_S = 3.0
+FLUENCY_CATEGORY_INTERVAL_S = 20.0
 
-def nback_sequence(n=60):
-    letters = list("BCDFGHJKLMNPQRSTVWXYZ")
-    seq = [random.choice(letters) for _ in range(n)]
-    targets = [False, False] + [seq[i] == seq[i-2] for i in range(2, n)]
-    return list(zip(seq, targets))
-
-def digit_span_sequence():
-    length = random.randint(5, 9)
-    return [str(random.randint(1,9)) for _ in range(length)]
-
-stroop_items = [
-    ("RED",   (0,0,255)),   ("BLUE",  (255,0,0)),
-    ("GREEN", (0,200,0)),   ("RED",   (255,0,0)),
-    ("BLUE",  (0,0,255)),   ("GREEN", (0,255,128)),
-    ("RED",   (0,200,0)),   ("BLUE",  (0,200,0)),
-    ("GREEN", (0,0,255)),   ("RED",   (255,0,0)),
+STROOP_ITEMS = [
+    ("RED", (0, 0, 255)),
+    ("BLUE", (255, 0, 0)),
+    ("GREEN", (0, 200, 0)),
+    ("RED", (255, 0, 0)),
+    ("BLUE", (0, 0, 255)),
+    ("GREEN", (0, 255, 128)),
+    ("RED", (0, 200, 0)),
+    ("BLUE", (0, 200, 0)),
+    ("GREEN", (0, 0, 255)),
+    ("RED", (255, 0, 0)),
 ]
-
-semantic_categories = {
-    "Animals":   ["dog","cat","elephant","tiger","parrot","whale","frog","eagle"],
-    "Fruits":    ["apple","mango","grape","peach","lemon","kiwi","plum","fig"],
-    "Countries": ["Brazil","Japan","Kenya","Sweden","Chile","Egypt","India","Peru"],
+FLUENCY_CATEGORIES = {
+    "Animals": ["dog", "cat", "elephant"],
+    "Fruits": ["apple", "mango", "grape"],
+    "Countries": ["Brazil", "Japan", "Kenya"],
 }
 
-# ── Task runners ─────────────────────────────────────────────
 
-def run_nback(cap, duration=90):
-    recordings = []
-    seq = nback_sequence(60)
-    idx = 0
-    last_switch = time.time()
-    stimulus_interval = 2.0
-    start = time.time()+2
-
-    while time.time() - start < duration:
-        ret, frame = cap.read()
-        if not ret: break
-        elapsed = time.time() - start
-
-        # Advance stimulus every 2 seconds
-        if time.time() - last_switch > stimulus_interval and idx < len(seq):
-            idx += 1
-            last_switch = time.time()
-
-        # Task display panel
-        panel = np.zeros((400, 700, 3), dtype=np.uint8)
-        cv2.putText(panel, "2-BACK TASK", (220, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (200,200,200), 2)
-        cv2.putText(panel, "Press SPACE if letter matches 2 back", (60, 75),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150,150,150), 1)
-        if idx < len(seq):
-            letter, is_target = seq[idx]
-            color = (0, 255, 0) if is_target else (255, 255, 255)
-            cv2.putText(panel, letter, (310, 240),
-                        cv2.FONT_HERSHEY_SIMPLEX, 6, color, 8)
-        cv2.putText(panel, f"Time: {int(duration-elapsed)}s", (10, 390),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100,100,100), 1)
-
-        diameter = detect_pupil(frame)
-        if diameter:
-            recordings.append({'timestamp': elapsed, 'avg_diameter': diameter, 'task': 'N-back'})
-
-        small = cv2.resize(frame, (233, 175))
-        panel[210:385, 460:693] = small
-        cv2.imshow("PupilAD Task", panel)
-        if cv2.waitKey(30) & 0xFF == ord('q'):
-            break
-
-    return pd.DataFrame(recordings)
-
-
-def run_digit_span(cap, duration=90):
-    recordings = []
-    start = time.time()+2
-    phase = "show"
-    phase_start = time.time()
-    seq = digit_span_sequence()
-    digit_idx = 0
-
-    while time.time() - start < duration:
-        ret, frame = cap.read()
-        if not ret: break
-        elapsed = time.time() - start
-        phase_elapsed = time.time() - phase_start
-
-        panel = np.zeros((400, 700, 3), dtype=np.uint8)
-        cv2.putText(panel, "DIGIT SPAN", (240, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (200,200,200), 2)
-        cv2.putText(panel, "Remember the sequence — recall when blank", (80, 75),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150,150,150), 1)
-
-        if phase == "show":
-            if phase_elapsed > 1.0:
-                digit_idx += 1
-                phase_start = time.time()
-                if digit_idx >= len(seq):
-                    phase = "recall"
-                    phase_start = time.time()
-                    digit_idx = 0
-            if digit_idx < len(seq):
-                cv2.putText(panel, seq[digit_idx], (310, 240),
-                            cv2.FONT_HERSHEY_SIMPLEX, 6, (255,255,255), 8)
-        else:
-            cv2.putText(panel, "RECALL", (255, 200),
-                        cv2.FONT_HERSHEY_SIMPLEX, 2, (0,200,255), 3)
-            cv2.putText(panel, " ".join(seq), (150, 270),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (100,100,100), 2)
-            if phase_elapsed > 5:
-                seq = digit_span_sequence()
-                digit_idx = 0
-                phase = "show"
-                phase_start = time.time()
-
-        cv2.putText(panel, f"Time: {int(duration-elapsed)}s", (10, 390),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100,100,100), 1)
-
-        diameter = detect_pupil(frame)
-        if diameter:
-            recordings.append({'timestamp': elapsed, 'avg_diameter': diameter, 'task': 'Digit Span'})
-
-        small = cv2.resize(frame, (233, 175))
-        panel[210:385, 460:693] = small
-        cv2.imshow("PupilAD Task", panel)
-        if cv2.waitKey(30) & 0xFF == ord('q'):
-            break
-
-    return pd.DataFrame(recordings)
-
-
-def run_stroop(cap, duration=90):
-    recordings = []
-    start = time.time()+2
-    idx = 0
-    last_switch = time.time()
-
-    while time.time() - start < duration:
-        ret, frame = cap.read()
-        if not ret: break
-        elapsed = time.time() - start
-
-        if time.time() - last_switch > 3.0:
-            idx = (idx + 1) % len(stroop_items)
-            last_switch = time.time()
-
-        word, color = stroop_items[idx]
-        panel = np.zeros((400, 700, 3), dtype=np.uint8)
-        cv2.putText(panel, "STROOP TASK", (230, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (200,200,200), 2)
-        cv2.putText(panel, "Say the COLOR of the ink, not the word", (80, 75),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150,150,150), 1)
-        cv2.putText(panel, word, (160, 240),
-                    cv2.FONT_HERSHEY_SIMPLEX, 4, color, 8)
-        cv2.putText(panel, f"Time: {int(duration-elapsed)}s", (10, 390),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100,100,100), 1)
-
-        diameter = detect_pupil(frame)
-        if diameter:
-            recordings.append({'timestamp': elapsed, 'avg_diameter': diameter, 'task': 'Stroop'})
-
-        small = cv2.resize(frame, (233, 175))
-        panel[210:385, 460:693] = small
-        cv2.imshow("PupilAD Task", panel)
-        if cv2.waitKey(30) & 0xFF == ord('q'):
-            break
-
-    return pd.DataFrame(recordings)
-
-
-def run_semantic_fluency(cap, duration=90):
-    recordings = []
-    start = time.time()+2
-    categories = list(semantic_categories.keys())
-    cat_idx = 0
-    last_switch = time.time()
-
-    while time.time() - start < duration:
-        ret, frame = cap.read()
-        if not ret: break
-        elapsed = time.time() - start
-
-        if time.time() - last_switch > 20.0:
-            cat_idx = (cat_idx + 1) % len(categories)
-            last_switch = time.time()
-
-        cat = categories[cat_idx]
-        examples = ", ".join(semantic_categories[cat][:3]) + "..."
-        panel = np.zeros((400, 700, 3), dtype=np.uint8)
-        cv2.putText(panel, "SEMANTIC FLUENCY", (160, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (200,200,200), 2)
-        cv2.putText(panel, "Say as many items as you can in the category", (60, 75),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150,150,150), 1)
-        cv2.putText(panel, cat.upper(), (230, 200),
-                    cv2.FONT_HERSHEY_SIMPLEX, 3, (0,220,255), 6)
-        cv2.putText(panel, f"e.g. {examples}", (100, 270),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (120,120,120), 1)
-        cv2.putText(panel, f"Time: {int(duration-elapsed)}s", (10, 390),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100,100,100), 1)
-
-        diameter = detect_pupil(frame)
-        if diameter:
-            recordings.append({'timestamp': elapsed, 'avg_diameter': diameter, 'task': 'Semantic Fluency'})
-
-        small = cv2.resize(frame, (233, 175))
-        panel[210:385, 460:693] = small
-        cv2.imshow("PupilAD Task", panel)
-        if cv2.waitKey(30) & 0xFF == ord('q'):
-            break
-
-    return pd.DataFrame(recordings)
-
-
-# ── Main session ─────────────────────────────────────────────
-
-def run_full_session():
-    cap = cv2.VideoCapture(0)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-
-    all_data = {}
-    task_runners = [
-        ("N-back",           run_nback),
-        ("Digit Span",       run_digit_span),
-        ("Stroop",           run_stroop),
-        ("Semantic Fluency", run_semantic_fluency),
+def nback_sequence(length=NBACK_LENGTH):
+    letters = [random.choice(NBACK_LETTERS) for _ in range(length)]
+    return [
+        (letter, index >= 2 and letter == letters[index - 2])
+        for index, letter in enumerate(letters)
     ]
 
-    print("\n" + "="*50)
-    print("    PupilAD — FULL COGNITIVE SESSION")
-    print("="*50)
-    print("4 tasks × 90 seconds each = ~6 minutes total")
-    input("Press ENTER to begin...")
 
-    for task_name, runner in task_runners:
-        input(f"\nPress ENTER to start: {task_name}")
-        data = runner(cap, duration=90)
-        all_data[task_name] = data
-        fname = f"pupil_{task_name.replace(' ','_')}.csv"
-        data.to_csv(fname, index=False)
-        print(f"  Saved {len(data)} frames → {fname}")
+def digit_sequence():
+    return [str(random.randint(1, 9)) for _ in range(random.randint(5, 9))]
 
-    cap.release()
+
+def blank_panel(title, instruction, seconds_left):
+    panel = np.zeros(PANEL_SHAPE, dtype=np.uint8)
+    cv2.putText(panel, title, (200, 40), FONT, 1.0, (200, 200, 200), 2)
+    cv2.putText(panel, instruction, (60, 75), FONT, 0.5, (150, 150, 150), 1)
+    cv2.putText(panel, f"Time: {int(seconds_left)}s", (10, 390), FONT, 0.6, (100, 100, 100), 1)
+    return panel
+
+
+def show(panel, frame):
+    panel[PREVIEW_SLOT] = cv2.resize(frame, PREVIEW_SIZE)
+    cv2.imshow("PupilAD Task", panel)
+    return cv2.waitKey(30) & 0xFF == QUIT_KEY
+
+
+class NBackScreen:
+    title = "2-BACK TASK"
+    instruction = "Press SPACE if letter matches 2 back"
+
+    def __init__(self):
+        self.sequence = nback_sequence()
+        self.index = 0
+        self.last_switch = time.time()
+
+    def draw(self, panel):
+        if time.time() - self.last_switch > NBACK_INTERVAL_S and self.index < len(self.sequence):
+            self.index += 1
+            self.last_switch = time.time()
+        if self.index < len(self.sequence):
+            letter, is_target = self.sequence[self.index]
+            color = (0, 255, 0) if is_target else (255, 255, 255)
+            cv2.putText(panel, letter, (310, 240), FONT, 6, color, 8)
+
+
+class DigitSpanScreen:
+    title = "DIGIT SPAN"
+    instruction = "Remember the sequence - recall when blank"
+
+    def __init__(self):
+        self.sequence = digit_sequence()
+        self.index = 0
+        self.recalling = False
+        self.phase_start = time.time()
+
+    def draw(self, panel):
+        phase_elapsed = time.time() - self.phase_start
+        if self.recalling:
+            cv2.putText(panel, "RECALL", (255, 200), FONT, 2, (0, 200, 255), 3)
+            cv2.putText(panel, " ".join(self.sequence), (150, 270), FONT, 1.2, (100, 100, 100), 2)
+            if phase_elapsed > RECALL_DURATION_S:
+                self.__init__()
+            return
+        if phase_elapsed > DIGIT_INTERVAL_S:
+            self.index += 1
+            self.phase_start = time.time()
+            if self.index >= len(self.sequence):
+                self.recalling = True
+                return
+        cv2.putText(panel, self.sequence[self.index], (310, 240), FONT, 6, (255, 255, 255), 8)
+
+
+class StroopScreen:
+    title = "STROOP TASK"
+    instruction = "Say the COLOR of the ink, not the word"
+
+    def __init__(self):
+        self.index = 0
+        self.last_switch = time.time()
+
+    def draw(self, panel):
+        if time.time() - self.last_switch > STROOP_INTERVAL_S:
+            self.index = (self.index + 1) % len(STROOP_ITEMS)
+            self.last_switch = time.time()
+        word, color = STROOP_ITEMS[self.index]
+        cv2.putText(panel, word, (160, 240), FONT, 4, color, 8)
+
+
+class FluencyScreen:
+    title = "SEMANTIC FLUENCY"
+    instruction = "Say as many items as you can in the category"
+
+    def __init__(self):
+        self.categories = list(FLUENCY_CATEGORIES)
+        self.index = 0
+        self.last_switch = time.time()
+
+    def draw(self, panel):
+        if time.time() - self.last_switch > FLUENCY_CATEGORY_INTERVAL_S:
+            self.index = (self.index + 1) % len(self.categories)
+            self.last_switch = time.time()
+        category = self.categories[self.index]
+        examples = ", ".join(FLUENCY_CATEGORIES[category]) + "..."
+        cv2.putText(panel, category.upper(), (230, 200), FONT, 3, (0, 220, 255), 6)
+        cv2.putText(panel, f"e.g. {examples}", (100, 270), FONT, 0.6, (120, 120, 120), 1)
+
+
+def run_task(capture, task_name, screen, duration_s=TASK_DURATION_S):
+    samples = []
+    start = time.time() + LEAD_IN_S
+    while time.time() - start < duration_s:
+        ok, frame = capture.read()
+        if not ok:
+            break
+        elapsed = time.time() - start
+        panel = blank_panel(screen.title, screen.instruction, duration_s - elapsed)
+        screen.draw(panel)
+        diameter_px = detect_pupil_diameter_px(frame)
+        if diameter_px:
+            samples.append({"timestamp": elapsed, "avg_diameter": diameter_px, "task": task_name})
+        if show(panel, frame):
+            break
+    return pd.DataFrame(samples)
+
+
+def run_session():
+    capture = cv2.VideoCapture(0)
+    capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    tasks = [
+        ("N-back", NBackScreen),
+        ("Digit Span", DigitSpanScreen),
+        ("Stroop", StroopScreen),
+        ("Semantic Fluency", FluencyScreen),
+    ]
+    input("4 tasks x 90 seconds. Press ENTER to begin...")
+    for task_name, screen_type in tasks:
+        input(f"Press ENTER to start: {task_name}")
+        samples = run_task(capture, task_name, screen_type())
+        path = OUTPUT_DIR / f"pupil_{task_name.replace(' ', '_')}.csv"
+        samples.to_csv(path, index=False)
+        print(f"Saved {len(samples)} frames to {path}")
+    capture.release()
     cv2.destroyAllWindows()
-    print("\nSession complete!")
-    return all_data
+
 
 if __name__ == "__main__":
-    run_full_session()
+    run_session()
