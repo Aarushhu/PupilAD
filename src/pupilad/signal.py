@@ -50,9 +50,7 @@ def lowpass_ignoring_nan(signal, sample_rate_hz, cutoff_hz, order=4):
     missing = np.isnan(signal)
     if missing.all():
         return signal.copy()
-    filled = np.interp(
-        np.arange(len(signal)), np.flatnonzero(~missing), signal[~missing]
-    )
+    filled = np.interp(np.arange(len(signal)), np.flatnonzero(~missing), signal[~missing])
     b, a = butter(order, cutoff_hz / (sample_rate_hz / 2), btype="low")
     filtered = filtfilt(b, a, filled)
     filtered[missing] = np.nan

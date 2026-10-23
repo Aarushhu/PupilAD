@@ -74,18 +74,14 @@ def clean_eye(samples):
     grid = np.arange(times[0], times[-1], 1 / SAMPLE_RATE_HZ)
     if (~invalid).sum() < MIN_VALID_SAMPLES:
         return empty_trace(grid)
-    resampled = interpolate_short_gaps(
-        times, diameter, invalid, grid, MAX_INTERPOLATED_GAP_S
-    )
+    resampled = interpolate_short_gaps(times, diameter, invalid, grid, MAX_INTERPOLATED_GAP_S)
     filtered = lowpass_ignoring_nan(resampled, SAMPLE_RATE_HZ, LOWPASS_CUTOFF_HZ)
     decimated = filtered[::DECIMATION]
     invalid_on_grid = np.interp(grid, times, invalid.astype(float))
     missing = np.maximum(
         block_means(invalid_on_grid, DECIMATION), np.isnan(decimated).astype(float)
     )
-    return CleanTrace(
-        grid[::DECIMATION], decimated, missing, float(1 - invalid.mean())
-    )
+    return CleanTrace(grid[::DECIMATION], decimated, missing, float(1 - invalid.mean()))
 
 
 def choose_eye(traces_by_eye, dominant_eye_id):
@@ -111,9 +107,7 @@ def digit_window_means(relative_times, relative_diameter, load):
             and in_window.any()
             and np.isfinite(relative_diameter[in_window]).any()
         )
-        means[f"d{digit}"] = (
-            float(np.nanmean(relative_diameter[in_window])) if usable else np.nan
-        )
+        means[f"d{digit}"] = float(np.nanmean(relative_diameter[in_window])) if usable else np.nan
     return means
 
 
@@ -138,9 +132,7 @@ def epoch_trial(trace, trial_digits):
         "n_recalled": trial_digits["recalled"].sum() if condition == "memory" else np.nan,
         "baseline_mm": baseline,
         "missing": missing,
-        "keep": bool(
-            complete and missing <= MAX_TRIAL_MISSING_FRACTION and np.isfinite(baseline)
-        ),
+        "keep": bool(complete and missing <= MAX_TRIAL_MISSING_FRACTION and np.isfinite(baseline)),
         **digit_window_means(relative_times, relative_diameter, load),
     }
     trace_row = np.full(TRACE_LENGTH, np.nan, dtype=np.float32)

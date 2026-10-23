@@ -36,9 +36,7 @@ def mark_inclusion(quality):
 def kept_trials(subjects):
     trials = load_ds003838_trials(subjects)
     trials = trials[trials["keep"]].copy()
-    trials["d_end"] = [
-        row[f"d{int(row['load'])}"] for _, row in trials.iterrows()
-    ]
+    trials["d_end"] = [row[f"d{int(row['load'])}"] for _, row in trials.iterrows()]
     trials["tlx_administration"] = (trials["trial"] - 1) // TRIALS_PER_TLX_ADMINISTRATION + 1
     return trials
 
@@ -130,9 +128,7 @@ def peak_digit_position(cells, load=13):
 def recall_capacity(subjects, load=13):
     behaviour = load_ds003838_behaviour(subjects)
     return (
-        behaviour[behaviour["condition"] == load]
-        .groupby("participant_id")["partialScore"]
-        .mean()
+        behaviour[behaviour["condition"] == load].groupby("participant_id")["partialScore"].mean()
     )
 
 
@@ -158,9 +154,7 @@ def effect_per_administration(trials):
         .unstack("condition")
     )
     per_load = (cells["memory"] - cells["control"]).rename("effect").reset_index()
-    return (
-        per_load.groupby(["subject", "tlx_administration"])["effect"].mean().reset_index()
-    )
+    return per_load.groupby(["subject", "tlx_administration"])["effect"].mean().reset_index()
 
 
 def subject_feature_table(trials, cells, quality, participants, subjects):
@@ -196,9 +190,7 @@ def build_features():
     subjects = quality.loc[quality["included"], "subject"].tolist()
     trials = kept_trials(subjects)
     cells = cell_means(trials)
-    features = subject_feature_table(
-        trials, cells, quality, load_ds003838_participants(), subjects
-    )
+    features = subject_feature_table(trials, cells, quality, load_ds003838_participants(), subjects)
     DS003838_DERIVED.mkdir(parents=True, exist_ok=True)
     quality.to_csv(DS003838_DERIVED / "quality.csv", index=False)
     trials.to_csv(DS003838_DERIVED / "kept_trials.csv", index=False)

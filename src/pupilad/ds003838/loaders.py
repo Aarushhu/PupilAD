@@ -7,9 +7,7 @@ from pupilad.paths import DS003838_DERIVED, DS003838_RAW, DS003838_SLIM
 
 
 def load_ds003838_participants():
-    return pd.read_csv(DS003838_RAW / "participants.tsv", sep="\t").set_index(
-        "participant_id"
-    )
+    return pd.read_csv(DS003838_RAW / "participants.tsv", sep="\t").set_index("participant_id")
 
 
 def load_ds003838_samples(subject):

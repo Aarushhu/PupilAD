@@ -40,12 +40,15 @@ def panel_title(axis, text):
 def condition_average_trace(trials, traces, condition, load):
     per_subject = []
     for subject, subject_traces in traces.items():
-        trial_numbers = trials.loc[
-            (trials["subject"] == subject)
-            & (trials["condition"] == condition)
-            & (trials["load"] == load),
-            "trial",
-        ].to_numpy() - 1
+        trial_numbers = (
+            trials.loc[
+                (trials["subject"] == subject)
+                & (trials["condition"] == condition)
+                & (trials["load"] == load),
+                "trial",
+            ].to_numpy()
+            - 1
+        )
         trial_numbers = trial_numbers[trial_numbers < len(subject_traces)]
         if len(trial_numbers):
             per_subject.append(np.nanmean(subject_traces[trial_numbers], axis=0))
@@ -63,13 +66,22 @@ def draw_time_courses(axis, trials, traces):
             mean, error = condition_average_trace(trials, traces, condition, load)
             axis.plot(seconds[:end], mean[:end], color=LOAD_COLORS[load], lw=2, ls=line_style)
             axis.fill_between(
-                seconds[:end], mean[:end] - error[:end], mean[:end] + error[:end],
-                color=LOAD_COLORS[load], alpha=0.15, lw=0,
+                seconds[:end],
+                mean[:end] - error[:end],
+                mean[:end] + error[:end],
+                color=LOAD_COLORS[load],
+                alpha=0.15,
+                lw=0,
             )
             if condition == "memory":
                 axis.annotate(
-                    f"{load} digits", (seconds[end - 1], mean[end - 1]), xytext=(4, 0),
-                    textcoords="offset points", color=INK, va="center", fontsize=9,
+                    f"{load} digits",
+                    (seconds[end - 1], mean[end - 1]),
+                    xytext=(4, 0),
+                    textcoords="offset points",
+                    color=INK,
+                    va="center",
+                    fontsize=9,
                 )
     axis.axhline(0, color=MUTED, lw=0.8)
     style_axis(axis)
@@ -81,7 +93,8 @@ def draw_time_courses(axis, trials, traces):
             Line2D([], [], color=INK, lw=2, label="Memorize"),
             Line2D([], [], color=INK, lw=2, ls=CONTROL_DASH, label="Just listen"),
         ],
-        frameon=False, loc="upper left",
+        frameon=False,
+        loc="upper left",
     )
 
 
@@ -94,8 +107,15 @@ def draw_points_by_load(axis, values_by_load, ylabel, ci_by_load):
         low, high = ci_by_load[load]
         mean = values.mean()
         axis.errorbar(
-            index, mean, yerr=[[mean - low], [high - mean]], fmt="o", color=INK,
-            ms=7, capsize=5, lw=1.6, zorder=5,
+            index,
+            mean,
+            yerr=[[mean - low], [high - mean]],
+            fmt="o",
+            color=INK,
+            ms=7,
+            capsize=5,
+            lw=1.6,
+            zorder=5,
         )
     axis.plot(range(len(LOADS)), [values_by_load[load].mean() for load in LOADS], color=INK, lw=1.2)
     axis.axhline(0, color=MUTED, lw=0.8)
@@ -119,14 +139,21 @@ def plot_load_dilation(trials, traces, features, results, path):
     friedman = load_effect["friedman"]
     panel_title(axes[1], "B  Effort effect by load")
     axes[1].text(
-        0.02, 0.98,
+        0.02,
+        0.98,
         f"Friedman χ²={friedman['chi2']:.1f}, p={friedman['p']:.1g}\nmean, bootstrap 95% CI; dots = people",
-        transform=axes[1].transAxes, va="top", fontsize=8.5, color=MUTED,
+        transform=axes[1].transAxes,
+        va="top",
+        fontsize=8.5,
+        color=MUTED,
     )
     n_included = results["sample"]["n_included"]
     figure.suptitle(
         f"OpenNeuro ds003838 · n = {n_included} young adults · Pupil Labs Core, 120 Hz",
-        x=0.01, ha="left", fontsize=9, color=MUTED,
+        x=0.01,
+        ha="left",
+        fontsize=9,
+        color=MUTED,
     )
     figure.tight_layout()
     figure.savefig(path, dpi=200)
@@ -166,11 +193,22 @@ def plot_load_slope_and_tlx(features, results, path):
     figure, axes = plt.subplots(1, 2, figsize=(10, 4.2))
     slopes = features["load_slope_end_mm_per_digit"].dropna()
     rng = np.random.default_rng(1)
-    axes[0].scatter(rng.uniform(-0.15, 0.15, len(slopes)), slopes, s=18, color=LOAD_COLORS[9], alpha=0.6, lw=0)
+    axes[0].scatter(
+        rng.uniform(-0.15, 0.15, len(slopes)), slopes, s=18, color=LOAD_COLORS[9], alpha=0.6, lw=0
+    )
     slope_test = results["load_slope"]["end_of_sequence_slope_mm_per_digit"]
     low, high = slope_test["mean_ci95"]
-    axes[0].errorbar(0, slope_test["mean"], yerr=[[slope_test["mean"] - low], [high - slope_test["mean"]]],
-                     fmt="o", color=INK, ms=8, capsize=6, lw=1.6, zorder=5)
+    axes[0].errorbar(
+        0,
+        slope_test["mean"],
+        yerr=[[slope_test["mean"] - low], [high - slope_test["mean"]]],
+        fmt="o",
+        color=INK,
+        ms=8,
+        capsize=6,
+        lw=1.6,
+        zorder=5,
+    )
     axes[0].axhline(0, color=MUTED, lw=0.8)
     axes[0].set_xlim(-0.6, 0.6)
     axes[0].set_xticks([])
@@ -178,13 +216,17 @@ def plot_load_slope_and_tlx(features, results, path):
     axes[0].set_ylabel("Linear load slope, 5→9→13 digits (mm per digit)")
     panel_title(axes[0], f"A  Load slope  mean {slope_test['mean']:.3f} [{low:.3f}, {high:.3f}]")
     tlx = features["tlx_mental_mean"]
-    axes[1].scatter(tlx, features["load_slope_end_mm_per_digit"], s=22, color=LOAD_COLORS[13], alpha=0.7, lw=0)
+    axes[1].scatter(
+        tlx, features["load_slope_end_mm_per_digit"], s=22, color=LOAD_COLORS[13], alpha=0.7, lw=0
+    )
     style_axis(axes[1], horizontal_grid_only=False)
     axes[1].set_xlabel("NASA-TLX mental demand (mean of 3 ratings)")
     axes[1].set_ylabel("Load slope (mm per digit)")
     correlation = results["tlx_between_person"]["load_slope_end_vs_tlx_mental"]
     rho_low, rho_high = correlation["rho_ci95"]
-    panel_title(axes[1], f"B  vs NASA-TLX  ρ = {correlation['rho']:.2f} [{rho_low:.2f}, {rho_high:.2f}]")
+    panel_title(
+        axes[1], f"B  vs NASA-TLX  ρ = {correlation['rho']:.2f} [{rho_low:.2f}, {rho_high:.2f}]"
+    )
     figure.tight_layout()
     figure.savefig(path, dpi=200)
     plt.close(figure)

@@ -9,10 +9,10 @@ from pupilad.paths import DS003838_RAW, DS003838_SLIM
 
 BUCKET_URL = "https://s3.amazonaws.com/openneuro.org/ds003838"
 SUBJECTS_WITHOUT_PUPIL = {"sub-017", "sub-094"}
+DOWNLOAD_ATTEMPTS = 3
 SLIM_COLUMNS = ["t", "eye", "conf", "diam", "blink"]
 PUPIL_3D_ROWS_AWK = (
-    'NR==1{next} $37=="pupil" && $8=="3d c++" '
-    '{print $1"\\t"$3"\\t"$4"\\t"$14"\\t"$36}'
+    'NR==1{next} $37=="pupil" && $8=="3d c++" ' '{print $1"\\t"$3"\\t"$4"\\t"$14"\\t"$36}'
 )
 
 
@@ -31,9 +31,7 @@ def fetch_small_file(relative_path, destination_root=DS003838_RAW):
 def list_subjects():
     participants = pd.read_csv(fetch_small_file("participants.tsv"), sep="\t")
     return [
-        subject
-        for subject in participants.participant_id
-        if subject not in SUBJECTS_WITHOUT_PUPIL
+        subject for subject in participants.participant_id if subject not in SUBJECTS_WITHOUT_PUPIL
     ]
 
 
@@ -54,16 +52,20 @@ def stream_pupil_samples(subject):
 
 
 def parse_slim_samples(tsv_text):
-    samples = pd.read_csv(
-        io.StringIO(tsv_text), sep="\t", header=None, names=SLIM_COLUMNS
-    )
-    samples = samples.astype(
-        {"t": "float64", "eye": "int8", "conf": "float32", "diam": "float32"}
-    )
-    samples["blink"] = (
-        pd.to_numeric(samples["blink"], errors="coerce").fillna(0).astype("int8")
-    )
+    samples = pd.read_csv(io.StringIO(tsv_text), sep="\t", header=None, names=SLIM_COLUMNS)
+    samples = samples.astype({"t": "float64", "eye": "int8", "conf": "float32", "diam": "float32"})
+    samples["blink"] = pd.to_numeric(samples["blink"], errors="coerce").fillna(0).astype("int8")
     return samples
+
+
+def download_subject_with_retries(subject):
+    last_error = None
+    for _ in range(DOWNLOAD_ATTEMPTS):
+        try:
+            return download_subject(subject)
+        except (RuntimeError, subprocess.CalledProcessError) as error:
+            last_error = error
+    return subject, f"FAILED after {DOWNLOAD_ATTEMPTS} attempts: {last_error}"
 
 
 def download_subject(subject):
@@ -95,7 +97,7 @@ def main(argv=None):
         fetch_small_file(name)
     subjects = args.subjects or list_subjects()
     with ThreadPoolExecutor(args.workers) as pool:
-        for subject, status in pool.map(download_subject, subjects):
+        for subject, status in pool.map(download_subject_with_retries, subjects):
             print(subject, status, flush=True)
 
 

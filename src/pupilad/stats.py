@@ -84,8 +84,13 @@ def repeated_measures_correlation(table, subject_column, x_column, y_column):
     r = float(np.corrcoef(centered_x, centered_y)[0, 1])
     n_subjects = table[subject_column].nunique()
     degrees_of_freedom = len(table) - n_subjects - 1
-    t_statistic = r * np.sqrt(degrees_of_freedom / (1 - r**2))
-    p = float(2 * stats.t.sf(abs(t_statistic), degrees_of_freedom))
+    p = (
+        0.0
+        if abs(r) >= 1
+        else float(
+            2 * stats.t.sf(abs(r) * np.sqrt(degrees_of_freedom / (1 - r**2)), degrees_of_freedom)
+        )
+    )
     z_half_width = 1.96 / np.sqrt(degrees_of_freedom - 1)
     ci = np.tanh(np.arctanh(r) + np.array([-z_half_width, z_half_width]))
     return {

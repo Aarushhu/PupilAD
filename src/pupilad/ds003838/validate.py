@@ -51,7 +51,10 @@ def sample_description(quality, trials, features):
         "n_included": len(included),
         "excluded": quality.loc[~quality["included"], "subject"].tolist(),
         "trials_kept": int(len(trials)),
-        "age_range": [int(participants.loc[included, "age"].min()), int(participants.loc[included, "age"].max())],
+        "age_range": [
+            int(participants.loc[included, "age"].min()),
+            int(participants.loc[included, "age"].max()),
+        ],
         "age_median": float(participants.loc[included, "age"].median()),
     }
 
@@ -68,13 +71,17 @@ def effect_by_load(features, prefix):
     means = {
         f"load_{load}": {
             "mean": round(float(complete[f"{prefix}_{load}"].mean()), 4),
-            "mean_ci95": [round(v, 4) for v in bootstrap_ci(complete[f"{prefix}_{load}"].to_numpy(), np.mean)],
+            "mean_ci95": [
+                round(v, 4) for v in bootstrap_ci(complete[f"{prefix}_{load}"].to_numpy(), np.mean)
+            ],
         }
         for load in LOADS
     }
     pairwise = with_holm(
         {
-            f"{high}_minus_{low}": paired_effect(complete[f"{prefix}_{high}"] - complete[f"{prefix}_{low}"])
+            f"{high}_minus_{low}": paired_effect(
+                complete[f"{prefix}_{high}"] - complete[f"{prefix}_{low}"]
+            )
             for low, high in LOAD_PAIRS
         }
     )
@@ -87,8 +94,12 @@ def effect_by_load(features, prefix):
 
 def load_slope_tests(features):
     return {
-        "end_of_sequence_slope_mm_per_digit": paired_effect(features["load_slope_end_mm_per_digit"]),
-        "sequence_mean_slope_mm_per_digit": paired_effect(features["load_slope_sequence_mean_mm_per_digit"]),
+        "end_of_sequence_slope_mm_per_digit": paired_effect(
+            features["load_slope_end_mm_per_digit"]
+        ),
+        "sequence_mean_slope_mm_per_digit": paired_effect(
+            features["load_slope_sequence_mean_mm_per_digit"]
+        ),
         "quadratic_contrast_end": paired_effect(features["load_quadratic_contrast_end"]),
     }
 
@@ -126,7 +137,10 @@ def tlx_within_person(features, administration_effects):
                 {
                     "subject": features.index,
                     "tlx_administration": administration,
-                    **{measure: features[f"tlx_{measure}_{administration}"].to_numpy() for measure in TLX_MEASURES},
+                    **{
+                        measure: features[f"tlx_{measure}_{administration}"].to_numpy()
+                        for measure in TLX_MEASURES
+                    },
                 }
             )
             for administration in (1, 2, 3)
@@ -134,14 +148,18 @@ def tlx_within_person(features, administration_effects):
     )
     merged = administration_effects.merge(long_tlx, on=["subject", "tlx_administration"])
     results = {
-        f"effect_vs_tlx_{measure}": repeated_measures_correlation(merged, "subject", "effect", measure)
+        f"effect_vs_tlx_{measure}": repeated_measures_correlation(
+            merged, "subject", "effect", measure
+        )
         for measure in TLX_MEASURES
     }
     results = with_holm(results)
     results["mean_by_administration"] = {
         int(administration): {
             "effect_mm": round(float(group["effect"].mean()), 4),
-            **{f"tlx_{measure}": round(float(group[measure].mean()), 2) for measure in TLX_MEASURES},
+            **{
+                f"tlx_{measure}": round(float(group[measure].mean()), 2) for measure in TLX_MEASURES
+            },
         }
         for administration, group in merged.groupby("tlx_administration")
     }
@@ -151,7 +169,9 @@ def tlx_within_person(features, administration_effects):
 def split_half(trials, subjects, measure):
     odd, even = [], []
     for subject in subjects:
-        memory = trials[(trials["subject"] == subject) & (trials["condition"] == "memory")].sort_values("trial")
+        memory = trials[
+            (trials["subject"] == subject) & (trials["condition"] == "memory")
+        ].sort_values("trial")
         odd.append(measure(memory.iloc[0::2]))
         even.append(measure(memory.iloc[1::2]))
     correlation = spearman_effect(odd, even)
@@ -207,7 +227,9 @@ def build_results():
         "within_sequence_slope_by_load": effect_by_load(features, "sequence_slope_mem_minus_ctrl"),
         "load_slope": load_slope_tests(features),
         "encoding_slope_digits_1to5": {
-            "memory_vs_control": paired_effect(features["encoding_slope_memory"] - features["encoding_slope_control"]),
+            "memory_vs_control": paired_effect(
+                features["encoding_slope_memory"] - features["encoding_slope_control"]
+            ),
             "memory_vs_zero": paired_effect(features["encoding_slope_memory"]),
         },
         "overload_13_digits": overload_tests(features),
@@ -232,8 +254,12 @@ def main(argv=None):
     results, trials, features, split_halves = build_results()
     path = write_results(results)
     traces = load_ds003838_traces(features.index.tolist())
-    plot_load_dilation(trials, traces, features, results, DS003838_RESULTS / "fig1_load_dilation.png")
-    plot_reliability(split_halves, features, results, DS003838_RESULTS / "fig2_reliability_overload.png")
+    plot_load_dilation(
+        trials, traces, features, results, DS003838_RESULTS / "fig1_load_dilation.png"
+    )
+    plot_reliability(
+        split_halves, features, results, DS003838_RESULTS / "fig2_reliability_overload.png"
+    )
     plot_load_slope_and_tlx(features, results, DS003838_RESULTS / "fig3_load_slope_tlx.png")
     summary = {key: results[key] for key in ("sample", "load_slope", "tlx_between_person")}
     print(json.dumps(summary, indent=1, default=float))
