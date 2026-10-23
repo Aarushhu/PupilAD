@@ -1,0 +1,5 @@
+{
+  "pupil_diameter_mm": "pupil_diameter_px",
+  "baseline_window_s": [-1.0, 0.0],
+  "response_window_s": [0.0, 999.0]
+}

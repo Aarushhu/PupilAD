@@ -32,33 +32,48 @@ TASK_EVENT_LABELS = {
 }
 
 
-def _simulate_pupil_trace(duration_sec, sample_rate, baseline_mm, profile="healthy", rng=None):
+def _simulate_pupil_trace(duration_sec, sample_rate, baseline_mm, profile="healthy", rng=None, difficulty=0.0):
     """
     Simulate a single task's pupil diameter trace.
     'healthy': gradual rise to a steady peak, holds, gradual return.
     'mci_like': either an exaggerated early peak that decays (early MCI)
                 or a blunted peak that never rises much (moderate MCI) —
                 picked randomly per call to give some variability.
+
+    `difficulty` (0.0-1.0) controls how much within-group noise/overlap is
+    injected, for stress-testing downstream classifiers against something
+    harder than two perfectly separable shapes: 0.0 reproduces the original
+    behavior exactly. Above 0.0, it (a) jitters each profile's amplitude by
+    an amount that grows with difficulty, and (b) with growing probability,
+    lets a subject's task-level curve actually take the OTHER profile's
+    shape while keeping its true label — real physiological heterogeneity
+    (not every "healthy" subject looks textbook-healthy on every task, and
+    vice versa), not just added sensor noise.
     """
     rng = rng or np.random.default_rng()
     n = int(duration_sec * sample_rate)
     t = np.linspace(0, duration_sec, n)
 
-    if profile == "healthy":
+    amplitude_noise_sd = difficulty * 0.35
+    flip_prob = difficulty * 0.4
+    effective_profile = profile
+    if rng.random() < flip_prob:
+        effective_profile = "mci_like" if profile == "healthy" else "healthy"
+
+    if effective_profile == "healthy":
         # smooth ramp up, steady plateau, smooth ramp down
-        amplitude = rng.uniform(0.5, 0.8)  # mm above baseline
+        amplitude = max(rng.uniform(0.5, 0.8) + rng.normal(0, amplitude_noise_sd), 0.02)
         rise = amplitude * (1 / (1 + np.exp(-(t - duration_sec * 0.15) / 5)))
         fall = amplitude * (1 / (1 + np.exp((t - duration_sec * 0.85) / 5)))
-        dilation = np.minimum(rise, fall) if False else rise - (amplitude - fall)
         dilation = rise * (fall / amplitude)  # simple bell-ish combination
     else:
         variant = rng.choice(["early_exaggerated", "blunted"])
         if variant == "early_exaggerated":
-            amplitude = rng.uniform(0.7, 1.1)
+            amplitude = max(rng.uniform(0.7, 1.1) + rng.normal(0, amplitude_noise_sd), 0.02)
             peak_time = duration_sec * rng.uniform(0.08, 0.15)  # peaks early
             dilation = amplitude * np.exp(-((t - peak_time) ** 2) / (2 * (duration_sec * 0.08) ** 2))
         else:  # blunted
-            amplitude = rng.uniform(0.15, 0.3)  # much smaller peak
+            amplitude = max(rng.uniform(0.15, 0.3) + rng.normal(0, amplitude_noise_sd), 0.02)
             rise = amplitude * (1 / (1 + np.exp(-(t - duration_sec * 0.3) / 8)))
             fall = amplitude * (1 / (1 + np.exp((t - duration_sec * 0.7) / 8)))
             dilation = rise * (fall / amplitude)
@@ -78,10 +93,13 @@ def _inject_blinks(trace, rng, n_blinks=3, blink_len_samples=15):
     return trace
 
 
-def generate_subject_session(subject_id: str, profile: str = "healthy", seed: int = None) -> pd.DataFrame:
+def generate_subject_session(subject_id: str, profile: str = "healthy", seed: int = None,
+                              difficulty: float = 0.0) -> pd.DataFrame:
     """
     Generate one full synthetic session (all 4 tasks + baselines + event
     markers) in the raw column format ingest_tobii.py expects.
+
+    `difficulty` is forwarded to _simulate_pupil_trace() — see its docstring.
     """
     rng = np.random.default_rng(seed)
     baseline_mm = rng.uniform(3.0, 4.5)  # resting pupil size, varies by subject
@@ -110,7 +128,7 @@ def generate_subject_session(subject_id: str, profile: str = "healthy", seed: in
             t_cursor_ms += dt_ms
 
         # --- task window ---
-        task_trace = _simulate_pupil_trace(TASK_DURATION_SEC, SAMPLE_RATE_HZ, baseline_mm, profile, rng)
+        task_trace = _simulate_pupil_trace(TASK_DURATION_SEC, SAMPLE_RATE_HZ, baseline_mm, profile, rng, difficulty)
         task_trace = _inject_blinks(task_trace, rng)
 
         task_start_ts = t_cursor_ms
@@ -135,21 +153,22 @@ def generate_subject_session(subject_id: str, profile: str = "healthy", seed: in
     return pd.DataFrame(rows)
 
 
-def generate_batch(n_healthy: int = 5, n_mci_like: int = 5, output_dir: str = "synthetic_exports") -> list:
+def generate_batch(n_healthy: int = 5, n_mci_like: int = 5, output_dir: str = "synthetic_exports",
+                    difficulty: float = 0.0) -> list:
     """Generate a batch of synthetic subject sessions and save as .tsv files."""
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     filepaths = []
 
     for i in range(n_healthy):
         subject_id = f"SYN_HEALTHY_{i+1:03d}"
-        df = generate_subject_session(subject_id, profile="healthy", seed=1000 + i)
+        df = generate_subject_session(subject_id, profile="healthy", seed=1000 + i, difficulty=difficulty)
         fp = f"{output_dir}/{subject_id}.tsv"
         df.to_csv(fp, sep="\t", index=False)
         filepaths.append(fp)
 
     for i in range(n_mci_like):
         subject_id = f"SYN_MCILIKE_{i+1:03d}"
-        df = generate_subject_session(subject_id, profile="mci_like", seed=2000 + i)
+        df = generate_subject_session(subject_id, profile="mci_like", seed=2000 + i, difficulty=difficulty)
         fp = f"{output_dir}/{subject_id}.tsv"
         df.to_csv(fp, sep="\t", index=False)
         filepaths.append(fp)

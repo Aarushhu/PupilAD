@@ -118,8 +118,65 @@ LITERATURE_BENCHMARKS = {
         "citation": "Granholm et al. 2021 (tau, not amyloid, associated with pupillary response)",
         "expected_direction": (
             "Pupillary dilation response relates to tau burden specifically, "
-            "not amyloid burden. Directly relevant to your pTau181 triage design."
+            "not amyloid burden. Directly relevant to your pTau181 triage design. "
+            "See ADNI_CSF_REFERENCE below for real magnitudes of tau/pTau181 by "
+            "diagnosis (not a pupillometry benchmark — no ADNI subject has pupil "
+            "data — but useful once you have pTau181 draws on your own subjects)."
         ),
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# 2b. ADNI CSF REFERENCE COHORT — real magnitudes computed directly from the
+#     local ADNI extract in data/adni/ (UPENNBIOMK_MASTER.csv x DXSUM.csv,
+#     inner join on RID+VISCODE, rows with a non-null DIAGNOSIS only).
+#     N=3530 visits, computed 2026-09-20.
+#
+#     IMPORTANT — this is NOT a pupillometry benchmark. No ADNI subject has
+#     pupil data, so this cannot validate the LC score directly (see
+#     validate_lc_synthetic.py / project notes for why). What it IS: a real
+#     normative distribution of CSF ABeta/tau/pTau181 by clinical diagnosis,
+#     useful for one thing only — once your own pupillometry subjects have a
+#     pTau181 (or tau/ABeta) draw, you can place that value against this
+#     distribution to say whether it looks CN-like, MCI-like, or Dementia-like,
+#     via check_ptau181_against_adni_reference() below. The correlation that
+#     actually validates the LC score (LC score vs. that draw) still has to
+#     be computed within your own cohort — ADNI only supplies the yardstick.
+# ---------------------------------------------------------------------------
+
+ADNI_CSF_REFERENCE = {
+    "source": "Local extract: data/adni/UPENNBIOMK_MASTER.csv joined to DXSUM.csv on (RID, VISCODE)",
+    "n_visits": 3530,
+    "computed": "2026-09-20",
+    "markers": {
+        "PTAU": {  # pg/mL, UPenn Luminex xMAP p-Tau181
+            "CN":       {"mean": 28.546, "std": 16.412, "median": 23.0, "n": 1055},
+            "MCI":      {"mean": 36.529, "std": 20.943, "median": 32.0, "n": 1604},
+            "Dementia": {"mean": 43.644, "std": 20.437, "median": 38.6, "n": 847},
+            "cohens_d_cn_vs_mci": 0.414,
+            "cohens_d_cn_vs_dementia": 0.824,
+            "p_cn_vs_mci": 1.11e-30,
+            "p_cn_vs_dementia": 9.67e-87,
+        },
+        "TAU": {  # pg/mL, total tau
+            "CN":       {"mean": 73.577, "std": 30.511, "median": 67.60, "n": 1047},
+            "MCI":      {"mean": 98.504, "std": 56.057, "median": 83.15, "n": 1606},
+            "Dementia": {"mean": 120.725, "std": 61.033, "median": 109.0, "n": 849},
+            "cohens_d_cn_vs_mci": 0.523,
+            "cohens_d_cn_vs_dementia": 1.009,
+            "p_cn_vs_mci": 1.77e-29,
+            "p_cn_vs_dementia": 1.64e-91,
+        },
+        "ABETA": {  # pg/mL, amyloid-beta 1-42 (note: DECREASES with severity)
+            "CN":       {"mean": 205.614, "std": 55.522, "median": 215.5, "n": 1058},
+            "MCI":      {"mean": 166.924, "std": 51.795, "median": 150.0, "n": 1602},
+            "Dementia": {"mean": 139.423, "std": 36.032, "median": 136.0, "n": 852},
+            "cohens_d_cn_vs_mci": -0.726,
+            "cohens_d_cn_vs_dementia": -1.384,
+            "p_cn_vs_mci": 6.96e-65,
+            "p_cn_vs_dementia": 1.70e-134,
+        },
     },
 }
 
@@ -204,30 +261,60 @@ def check_measurement_validity(features: pd.DataFrame) -> list:
     results = []
     lo, hi = LITERATURE_BENCHMARKS["plausible_pupil_diameter_mm"]["range"]
 
-    out_of_range = features[
-        (features["baseline_diameter_mm"] < lo) | (features["baseline_diameter_mm"] > hi)
-    ]
-    pct_bad = 100 * len(out_of_range) / max(len(features), 1)
-    results.append({
-        "check": "Baseline pupil diameter within plausible physiological range",
-        "citation": LITERATURE_BENCHMARKS["plausible_pupil_diameter_mm"]["note"],
-        "pass": pct_bad < 5.0,
-        "detail": f"{pct_bad:.1f}% of trials have baseline diameter outside {lo}-{hi}mm "
-                  f"(threshold: fail if >5%).",
-    })
+    # Webcam pixel-diameter data (see task_battery/extract_pupil_from_video.py)
+    # runs 20-100+ "mm" once passed through this column — not a data-quality
+    # bug, just uncalibrated units. Flag it as skipped/informational instead
+    # of a hard FAIL, which would misrepresent a units mismatch as a real
+    # measurement problem.
+    median_baseline = features["baseline_diameter_mm"].median()
+    looks_uncalibrated = pd.notna(median_baseline) and median_baseline > hi * 2
 
-    velocities = features["mean_constriction_velocity_mm_s"].dropna()
+    if looks_uncalibrated:
+        results.append({
+            "check": "Baseline pupil diameter within plausible physiological range",
+            "citation": LITERATURE_BENCHMARKS["plausible_pupil_diameter_mm"]["note"],
+            "pass": None,
+            "detail": f"SKIPPED — median baseline value ({median_baseline:.1f}) is far outside the "
+                      f"{lo}-{hi}mm physiological range, which almost certainly means this data is in "
+                      f"uncalibrated units (e.g. webcam pixels), not real millimeters — expected for "
+                      f"that data source, not a measurement failure. The Layer 2 checks below remain "
+                      f"valid since they're rank-based and don't depend on absolute calibration. Get a "
+                      f"real mm-calibrated device before trusting a PASS/FAIL here.",
+        })
+    else:
+        out_of_range = features[
+            (features["baseline_diameter_mm"] < lo) | (features["baseline_diameter_mm"] > hi)
+        ]
+        pct_bad = 100 * len(out_of_range) / max(len(features), 1)
+        results.append({
+            "check": "Baseline pupil diameter within plausible physiological range",
+            "citation": LITERATURE_BENCHMARKS["plausible_pupil_diameter_mm"]["note"],
+            "pass": pct_bad < 5.0,
+            "detail": f"{pct_bad:.1f}% of trials have baseline diameter outside {lo}-{hi}mm "
+                      f"(threshold: fail if >5%).",
+        })
+
     v_lo = LITERATURE_BENCHMARKS["constriction_velocity_cutoff_low"]["value_mm_s"]
     v_hi = LITERATURE_BENCHMARKS["constriction_velocity_cutoff_high"]["value_mm_s"]
-    frac_in_published_band = ((velocities >= v_lo * 0.5) & (velocities <= v_hi * 2)).mean() if len(velocities) else 0
-    results.append({
-        "check": "Constriction velocity in same order of magnitude as published cutoffs",
-        "citation": LITERATURE_BENCHMARKS["constriction_velocity_cutoff_low"]["citation"],
-        "pass": frac_in_published_band > 0.8,
-        "detail": f"{frac_in_published_band*100:.1f}% of trials fall within a generous band "
-                  f"around the published {v_lo}-{v_hi} mm/s cutoffs. A low number here usually "
-                  f"means a units mismatch (e.g., mm/s vs px/s) rather than a real physiological finding.",
-    })
+    if looks_uncalibrated:
+        results.append({
+            "check": "Constriction velocity in same order of magnitude as published cutoffs",
+            "citation": LITERATURE_BENCHMARKS["constriction_velocity_cutoff_low"]["citation"],
+            "pass": None,
+            "detail": "SKIPPED — same uncalibrated-units issue as the baseline-diameter check above; "
+                      "this cutoff assumes real mm/s.",
+        })
+    else:
+        velocities = features["mean_constriction_velocity_mm_s"].dropna()
+        frac_in_published_band = ((velocities >= v_lo * 0.5) & (velocities <= v_hi * 2)).mean() if len(velocities) else 0
+        results.append({
+            "check": "Constriction velocity in same order of magnitude as published cutoffs",
+            "citation": LITERATURE_BENCHMARKS["constriction_velocity_cutoff_low"]["citation"],
+            "pass": frac_in_published_band > 0.8,
+            "detail": f"{frac_in_published_band*100:.1f}% of trials fall within a generous band "
+                      f"around the published {v_lo}-{v_hi} mm/s cutoffs. A low number here usually "
+                      f"means a units mismatch (e.g., mm/s vs px/s) rather than a real physiological finding.",
+        })
     return results
 
 
@@ -316,6 +403,45 @@ def check_lc_score_correlation(features: pd.DataFrame, lc_scores: pd.DataFrame) 
     return results
 
 
+def check_ptau181_against_adni_reference(ptau181_value: float) -> list:
+    """
+    Layer 3: place a real pTau181 draw from one of YOUR subjects against the
+    ADNI CSF reference cohort (see ADNI_CSF_REFERENCE) to say whether it looks
+    CN-like, MCI-like, or Dementia-like. This does NOT validate the LC score
+    by itself — it only interprets the biomarker. The actual validating step
+    is correlating LC score against this same subject's draw across your
+    cohort, once you have enough subjects with both.
+    """
+    ref = ADNI_CSF_REFERENCE["markers"]["PTAU"]
+    results = []
+
+    z_scores = {}
+    for group in ("CN", "MCI", "Dementia"):
+        mean, std = ref[group]["mean"], ref[group]["std"]
+        z_scores[group] = abs(ptau181_value - mean) / std
+
+    closest_group = min(z_scores, key=z_scores.get)
+
+    detail_lines = [
+        f"{group}: ADNI mean={ref[group]['mean']:.1f} pg/mL (sd={ref[group]['std']:.1f}, "
+        f"n={ref[group]['n']}), this value is {z_scores[group]:.2f} SD away"
+        for group in ("CN", "MCI", "Dementia")
+    ]
+    results.append({
+        "check": f"pTau181={ptau181_value:.1f} pg/mL vs. ADNI CN/MCI/Dementia reference",
+        "citation": ADNI_CSF_REFERENCE["source"] + f" (n={ADNI_CSF_REFERENCE['n_visits']} visits, "
+                    f"computed {ADNI_CSF_REFERENCE['computed']})",
+        "pass": None,  # informational only — proximity to a group isn't a diagnosis
+        "detail": (
+            f"Closest to the {closest_group} reference group. " + "; ".join(detail_lines) +
+            ". This is a normative comparison only, not a diagnosis, and ADNI's CSF assay "
+            "may not be directly comparable to a different lab's assay/units — check before "
+            "treating these numbers as calibrated to your own draws."
+        ),
+    })
+    return results
+
+
 # ---------------------------------------------------------------------------
 # 5. REPORT
 # ---------------------------------------------------------------------------
@@ -381,6 +507,11 @@ def main():
                          help="Path to CSV with columns subject_id, lc_score.")
     parser.add_argument("--column_map", type=str, default=None,
                          help="Path to JSON file overriding DEFAULT_COLUMN_MAP.")
+    parser.add_argument("--ptau181", type=float, default=None,
+                         help="A real pTau181 draw (pg/mL) from one of your subjects. If given, "
+                              "reports where it falls relative to the ADNI CN/MCI/Dementia "
+                              "reference cohort (see ADNI_CSF_REFERENCE) — informational only, "
+                              "not a validation of the LC score by itself.")
     args = parser.parse_args()
 
     cmap = dict(DEFAULT_COLUMN_MAP)
@@ -402,6 +533,9 @@ def main():
     all_checks.append(("Layer 2: Construct validity (internal)", check_construct_validity(features)))
     if lc_scores is not None:
         all_checks.append(("Layer 2: Construct validity (LC score)", check_lc_score_correlation(features, lc_scores)))
+    if args.ptau181 is not None:
+        all_checks.append(("Layer 3: External biomarker context (ADNI reference)",
+                            check_ptau181_against_adni_reference(args.ptau181)))
 
     print_report(all_checks)
 

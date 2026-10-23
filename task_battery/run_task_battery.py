@@ -104,6 +104,14 @@ SEMANTIC_FLUENCY_DURATION_SEC = 60
 INSTRUCTION_TEXT_HEIGHT = 0.04
 INSTRUCTION_WRAP_WIDTH = 1.4
 
+# On-screen reminder / progress text shown DURING each task (not just on the
+# instructions page) so participants don't have to hold the rules in memory
+# while also concentrating on the task itself.
+REMINDER_HEIGHT = 0.035
+REMINDER_POS = (0, -0.42)
+PROGRESS_POS = (0, 0.44)
+REMINDER_COLOR = "grey"
+
 
 # =====================================================================
 # INSTRUCTION PAGINATION (fixes text overflowing the window)
@@ -126,6 +134,46 @@ def show_instructions_paginated(win, pages, height=INSTRUCTION_TEXT_HEIGHT,
         stim.draw()
         win.flip()
         event.waitKeys(keyList=["space"])
+
+
+def make_reminder(win, text):
+    """Small persistent reminder text drawn at the bottom of the screen
+    throughout a task, so the rule stays visible without cluttering the
+    main stimulus area."""
+    return visual.TextStim(
+        win, text=text, height=REMINDER_HEIGHT, pos=REMINDER_POS,
+        color=REMINDER_COLOR, wrapWidth=INSTRUCTION_WRAP_WIDTH,
+    )
+
+
+def make_progress(win):
+    """Small persistent progress text ('Trial 3 of 20') at the top of the
+    screen, updated by setting .text before each draw."""
+    return visual.TextStim(win, text="", height=REMINDER_HEIGHT, pos=PROGRESS_POS, color=REMINDER_COLOR)
+
+
+def show_task_transition(win, task_number, total_tasks, task_name, pause_sec=2.0):
+    """Between-task screen naming what's next and how far along the session
+    is, instead of a blank grey screen — participants otherwise have no idea
+    how many tasks remain in a ~6-minute battery."""
+    stim = visual.TextStim(
+        win, text=f"Task {task_number} of {total_tasks}\n\n{task_name}",
+        height=0.07, wrapWidth=INSTRUCTION_WRAP_WIDTH,
+    )
+    stim.draw()
+    win.flip()
+    core.wait(pause_sec)
+
+
+def show_countdown(win, seconds=3):
+    """Brief 'get ready' countdown between the instructions and the task
+    itself, so participants (and the recording) have a clear, consistent
+    transition instead of the task starting the instant they press SPACE."""
+    for i in range(seconds, 0, -1):
+        stim = visual.TextStim(win, text=f"Get ready...\n\n{i}", height=0.1, color="yellow")
+        stim.draw()
+        win.flip()
+        core.wait(1.0)
 
 
 # =====================================================================
@@ -260,8 +308,6 @@ def make_log_writer(subject_id):
 # =====================================================================
 
 def run_nback(win, log_writer):
-    send_marker(win, "NBACK_START", log_writer)
-
     pages = [
         (
             "N-BACK TASK\n\n"
@@ -282,6 +328,13 @@ def run_nback(win, log_writer):
         ),
     ]
     show_instructions_paginated(win, pages)
+    show_countdown(win)
+
+    # Marker sent AFTER instructions/countdown, right as trials begin — this
+    # is what ingest_tobii.py's segment_tasks() uses as the task window
+    # start, so sending it any earlier would fold instruction-reading time
+    # into the "task" pupil window and its preceding baseline.
+    send_marker(win, "NBACK_START", log_writer)
 
     letters = [random.choice(string.ascii_uppercase) for _ in range(NBACK_TRIALS)]
     # force some real matches so the task isn't trivially all-mismatch
@@ -291,11 +344,21 @@ def run_nback(win, log_writer):
 
     results = []
     stim = visual.TextStim(win, text="", height=0.15)
+    reminder = make_reminder(win, f"Press SPACE if this letter matches the one from {NBACK_N} letters back")
+    progress = make_progress(win)
 
     for i, letter in enumerate(letters):
         stim.text = letter
+        progress.text = f"Trial {i + 1} of {NBACK_TRIALS}"
         stim.draw()
+        reminder.draw()
+        progress.draw()
         win.flip()
+        # Absolute onset time on the same clock as send_marker() and the
+        # webcam frame log, so an offline pupil-extraction step can slice
+        # this exact trial's window instead of reconstructing it from
+        # nominal SOA timing (which drifts when a response cuts a trial short).
+        onset_time = core.getTime()
 
         rt_clock = core.Clock()
         keys = event.waitKeys(maxWait=NBACK_LETTER_DURATION, keyList=["space"], timeStamped=rt_clock)
@@ -308,9 +371,12 @@ def run_nback(win, log_writer):
             "trial": i, "letter": letter, "is_match": is_match,
             "responded": responded, "rt": rt,
             "correct": (responded == is_match),
+            "onset_time": onset_time,
         })
 
-        win.flip()  # blank screen
+        reminder.draw()
+        progress.draw()
+        win.flip()  # blank screen (reminder/progress stay visible)
         core.wait(NBACK_SOA - NBACK_LETTER_DURATION)
 
     send_marker(win, "NBACK_END", log_writer)
@@ -322,8 +388,6 @@ def run_nback(win, log_writer):
 # =====================================================================
 
 def run_digit_span(win, log_writer):
-    send_marker(win, "DIGITSPAN_START", log_writer)
-
     pages = [
         (
             "DIGIT SPAN TASK\n\n"
@@ -346,34 +410,49 @@ def run_digit_span(win, log_writer):
         ),
     ]
     show_instructions_paginated(win, pages)
+    show_countdown(win)
+
+    # See run_nback() for why the marker goes after instructions/countdown.
+    send_marker(win, "DIGITSPAN_START", log_writer)
 
     results = []
+    progress = make_progress(win)
 
     for direction in ["forward", "backward"]:
         length = DIGIT_SPAN_START_LENGTH
         while length <= DIGIT_SPAN_MAX_LENGTH:
             digits = [str(random.randint(0, 9)) for _ in range(length)]
+            progress.text = f"{direction.upper()} — sequence length {length}"
+            # Onset of this length's presentation phase, and later the end of
+            # its recall phase, on the same clock as send_marker() — together
+            # they bound this trial's window for offline pupil extraction.
+            stim_onset_time = core.getTime()
 
             for d in digits:
                 stim = visual.TextStim(win, text=d, height=0.2)
                 stim.draw()
+                progress.draw()
                 win.flip()
                 core.wait(DIGIT_PRESENT_DURATION)
+                progress.draw()
                 win.flip()
                 core.wait(DIGIT_ISI)
 
             prompt = visual.TextStim(
                 win, text="Type the digits you saw, then press ENTER\n"
                           f"({'same order' if direction == 'forward' else 'REVERSE order'})",
-                height=0.06,
+                height=0.06, pos=(0, 0.15),
             )
             prompt.draw()
+            progress.draw()
             win.flip()
 
             response = ""
+            recall_end_time = None
             while True:
                 keys = event.waitKeys()
                 if "return" in keys:
+                    recall_end_time = core.getTime()
                     break
                 elif "backspace" in keys:
                     response = response[:-1]
@@ -381,8 +460,14 @@ def run_digit_span(win, log_writer):
                     for k in keys:
                         if k.isdigit():
                             response += k
+                # Redraw the prompt every frame — previously it was only
+                # drawn once before the loop, so it vanished the instant the
+                # participant started typing, right when they'd most want a
+                # reminder of which order to type in.
+                prompt.draw()
                 display = visual.TextStim(win, text=response, height=0.1)
                 display.draw()
+                progress.draw()
                 win.flip()
 
             expected = "".join(digits) if direction == "forward" else "".join(reversed(digits))
@@ -391,6 +476,7 @@ def run_digit_span(win, log_writer):
             results.append({
                 "direction": direction, "length": length,
                 "digits": "".join(digits), "response": response, "correct": correct,
+                "stim_onset_time": stim_onset_time, "recall_end_time": recall_end_time,
             })
 
             if not correct:
@@ -406,8 +492,6 @@ def run_digit_span(win, log_writer):
 # =====================================================================
 
 def run_stroop(win, log_writer):
-    send_marker(win, "STROOP_START", log_writer)
-
     pages = [
         (
             "STROOP TASK\n\n"
@@ -426,18 +510,35 @@ def run_stroop(win, log_writer):
         ),
     ]
     show_instructions_paginated(win, pages)
+    show_countdown(win)
+
+    # See run_nback() for why the marker goes after instructions/countdown.
+    send_marker(win, "STROOP_START", log_writer)
 
     key_map = {"r": "red", "b": "blue", "g": "green", "y": "yellow"}
     results = []
+    # The key legend is the one thing worth keeping on screen throughout —
+    # remembering 4 arbitrary key mappings while also reacting fast to a
+    # Stroop stimulus is exactly the kind of working-memory load this
+    # reminder should take off the participant.
+    reminder = make_reminder(win, "R = red      B = blue      G = green      Y = yellow")
+    progress = make_progress(win)
 
     for i in range(STROOP_TRIALS):
         word = random.choice(STROOP_COLORS)
         ink_color = random.choice(STROOP_COLORS)
         is_congruent = word == ink_color
 
+        progress.text = f"Trial {i + 1} of {STROOP_TRIALS}"
         stim = visual.TextStim(win, text=word.upper(), color=ink_color, height=0.15)
         stim.draw()
+        reminder.draw()
+        progress.draw()
         win.flip()
+        # See run_nback() for why this is logged — lets offline pupil
+        # extraction slice this exact trial instead of guessing from nominal
+        # timing (Stroop's per-trial duration varies with response speed).
+        onset_time = core.getTime()
 
         rt_clock = core.Clock()
         keys = event.waitKeys(maxWait=3.0, keyList=list(key_map.keys()), timeStamped=rt_clock)
@@ -451,8 +552,11 @@ def run_stroop(win, log_writer):
             "is_congruent": is_congruent, "responded": responded,
             "response_color": response_color, "rt": rt,
             "correct": (response_color == ink_color),
+            "onset_time": onset_time,
         })
 
+        reminder.draw()
+        progress.draw()
         win.flip()
         core.wait(0.5)
 
@@ -465,8 +569,6 @@ def run_stroop(win, log_writer):
 # =====================================================================
 
 def run_semantic_fluency(win, log_writer):
-    send_marker(win, "FLUENCY_START", log_writer)
-
     pages = [
         (
             "SEMANTIC FLUENCY TASK\n\n"
@@ -484,6 +586,10 @@ def run_semantic_fluency(win, log_writer):
         ),
     ]
     show_instructions_paginated(win, pages)
+    show_countdown(win)
+
+    # See run_nback() for why the marker goes after instructions/countdown.
+    send_marker(win, "FLUENCY_START", log_writer)
 
     timer_clock = core.Clock()
     while timer_clock.getTime() < SEMANTIC_FLUENCY_DURATION_SEC:
@@ -523,12 +629,13 @@ def main():
         webcam_recorder.start()
 
     try:
+        show_task_transition(win, 1, 4, "N-Back")
         nback_results = run_nback(win, log_writer)
-        core.wait(2.0)  # brief inter-task rest
+        show_task_transition(win, 2, 4, "Digit Span")
         digit_span_results = run_digit_span(win, log_writer)
-        core.wait(2.0)
+        show_task_transition(win, 3, 4, "Stroop")
         stroop_results = run_stroop(win, log_writer)
-        core.wait(2.0)
+        show_task_transition(win, 4, 4, "Semantic Fluency")
         semantic_fluency_results = run_semantic_fluency(win, log_writer)
 
         end_stim = visual.TextStim(win, text="Session complete. Thank you!", height=0.08)
