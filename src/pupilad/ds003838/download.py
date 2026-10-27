@@ -85,14 +85,11 @@ def download_subject_with_retries(subject):
 
 
 def download_subject(subject):
-    for relative_path in (
-        f"{subject}/pupil/{subject}_task-memory_events.tsv",
-        f"{subject}/beh/{subject}_task-memory_beh.tsv",
-    ):
-        try:
-            fetch_small_file(relative_path)
-        except subprocess.CalledProcessError:
-            pass
+    fetch_small_file(f"{subject}/pupil/{subject}_task-memory_events.tsv")
+    try:
+        fetch_small_file(f"{subject}/beh/{subject}_task-memory_beh.tsv")
+    except subprocess.CalledProcessError:
+        pass
     slim_path = DS003838_SLIM / f"{subject}.parquet"
     if slim_path.exists():
         return subject, "cached"
