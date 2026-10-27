@@ -27,11 +27,11 @@ call.
 
 ## Data in git history
 
-`PupilAD-ISEF2027/data/adni/*.csv` (four ADNI tables) were committed in earlier history and were
-removed from the current tree in commit `a3dce03`. They remain in history because history was not
-rewritten. ADNI's Data Use Agreement does not allow redistribution. The GitHub repository is
-currently private. **Decide**: whether to purge them from history before the repository is ever
-made public.
+Four ADNI tables (`PupilAD-ISEF2027/data/adni/*.csv`) were committed in July–September 2026.
+On 26 Oct 2026 they were purged from every commit with `git filter-repo` and the cleaned history
+was force-pushed, because ADNI's Data Use Agreement does not allow redistribution. Commit dates and
+messages were kept; commit IDs changed. ADNI data now lives only on the author's machine and is
+excluded by `.gitignore` (`data/`).
 
 ## Removed as duplicates or dead code
 
