@@ -31,7 +31,6 @@ per-trial pupil table. Details, output files and timing accuracy are in [`docs/a
 
 ## Where everything is
 
-### Suggested reading order
 
 1. [`results/literature_comparison.md`](results/literature_comparison.md): the main results, with a
    short "Bottom line" at the start and a section on what they cannot show.
