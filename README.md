@@ -79,30 +79,37 @@ src/pupilad/
     features.py            inclusion rules and per-person features
     validate.py            statistics, written to stats.json
     figures.py             the three result figures
+
   app/                     task battery app
     server.py              web server, sessions, saved files, automatic analysis
     scoring.py             task score summaries
     checks.py              camera check on a single frame
     recording.py           convert the browser recording to video and frame timestamps
     tls.py                 HTTPS certificate for phones and tablets
+
     static/                browser side
       index.html, app.css  page and styling
       app.js               screens and session flow
       battery.js           the four tasks and their settings
       media.js             camera, microphone, recording and upload
       chart.js             pupil trace chart on the Results tab
+
   webcam/
     pupil_detector.py      OpenCV pupil detection for one video frame
     video_extraction.py    pupil trace from a recorded session video
     trial_table.py         combine a pupil trace with task logs
     column_map.json        column settings for webcam data
+
   tobii/
     ingest.py              features from Tobii Pro Lab exports
     synthetic.py           synthetic Tobii-style export generator
+
   plr/
     ingest.py              pupillary light reflex features
+
   model/
     lstm.py                LSTM definition and score-to-risk-tier mapping
+
   validation/
     benchmarks.py          published reference values and ADNI CSF summary
     lc_score.py            sanity checks on task pupil features (lc-check)
@@ -128,9 +135,4 @@ data/                      local only, gitignored
   task_battery_logs/       session files from the app and the PsychoPy battery
   webcam_pilot/            local webcam pilot data
   app_certificate/         certificate created for phone and tablet mode
-```
 
-All real-data statistics come from ds003838. The Tobii, PLR, webcam and LSTM code has no real-data
-results in this repository, and the committed LSTM results in `results/synthetic/` come from
-hand-designed synthetic data. Running `make train` writes a new file,
-`results/synthetic/recovery_scaling.csv`, and leaves the saved runs unchanged.
