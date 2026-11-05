@@ -6,6 +6,7 @@ __pycache__/
 .ipynb_checkpoints/
 .venv/
 .venv-psychopy/
+.venv-app/
 *.egg-info/
 .pytest_cache/
 extracted_features.csv

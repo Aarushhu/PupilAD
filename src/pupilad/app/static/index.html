@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PupilAD</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar" id="topbar">
+    <span class="brand">PupilAD</span>
+    <nav>
+      <button class="tab active" data-view="setup">New session</button>
+      <button class="tab" data-view="results">Results</button>
+    </nav>
+  </header>
+
+  <main id="view-setup" class="view">
+    <section class="card">
+      <h2>1. Participant</h2>
+      <div class="grid2">
+        <label>Subject ID <input id="subject-id" autocomplete="off" placeholder="e.g. P001"></label>
+        <label>Session <input id="session-number" value="1"></label>
+      </div>
+      <label>Notes (optional) <input id="session-notes" autocomplete="off" placeholder="room, lighting, glasses…"></label>
+    </section>
+
+    <section class="card">
+      <h2>2. Camera check</h2>
+      <div class="camera-row">
+        <div class="preview-wrap"><img id="camera-preview" alt="Webcam preview"></div>
+        <div class="camera-info">
+          <label>Camera <select id="camera-index"></select></label>
+          <dl id="camera-stats"></dl>
+          <p class="hint">Seat the participant so their face fills the middle of the frame, with even
+            light and no glare on glasses. Aim for pupil detection above 50% before starting.</p>
+          <label class="check"><input type="checkbox" id="record-webcam" checked> Record webcam during the session</label>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>3. Tasks</h2>
+      <div class="task-list" id="task-list"></div>
+      <details>
+        <summary>Advanced settings</summary>
+        <div class="grid3" id="settings-grid"></div>
+        <button class="link" id="reset-settings" type="button">Reset to defaults</button>
+      </details>
+    </section>
+
+    <section class="card start-card">
+      <p class="hint">The battery runs full-screen. Participants use the keyboard only.
+        Experimenter: press <kbd>Shift</kbd>+<kbd>Esc</kbd> at any time to abort; completed tasks are kept.</p>
+      <p id="setup-error" class="error" hidden></p>
+      <button class="primary" id="start-button">Start session</button>
+    </section>
+  </main>
+
+  <main id="view-results" class="view" hidden>
+    <section class="card">
+      <h2>Sessions</h2>
+      <p class="hint">Data folder: <code id="data-folder"></code></p>
+      <table class="sessions" id="sessions-table">
+        <thead><tr><th>Subject</th><th>Session</th><th>Started</th><th>Video</th><th>Pupil trace</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p id="sessions-empty" class="hint" hidden>No sessions recorded yet.</p>
+    </section>
+    <section class="card" id="session-detail" hidden></section>
+  </main>
+
+  <div id="stage" hidden>
+    <div id="stage-progress" class="stage-progress"></div>
+    <div id="stage-center" class="stage-center"></div>
+    <div id="stage-reminder" class="stage-reminder"></div>
+  </div>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

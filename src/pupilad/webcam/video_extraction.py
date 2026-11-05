@@ -29,9 +29,11 @@ def video_frames(video_path):
         capture.release()
 
 
-def extract_pupil_trace(video_path, frame_timestamps, subject_id):
+def extract_pupil_trace(video_path, frame_timestamps, subject_id, progress=None):
     rows = []
     for frame, (_, timestamp) in zip(video_frames(video_path), frame_timestamps.iterrows()):
+        if progress is not None:
+            progress(len(rows))
         diameter_px = detect_pupil_diameter_px(frame)
         rows.append(
             {

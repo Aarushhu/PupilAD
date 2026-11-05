@@ -2,6 +2,7 @@ import importlib
 import sys
 
 COMMANDS = {
+    "app": "pupilad.app.server",
     "download": "pupilad.ds003838.download",
     "preprocess": "pupilad.ds003838.preprocess",
     "features": "pupilad.ds003838.features",
