@@ -3,10 +3,10 @@ const WIDTH = 900;
 const HEIGHT = 300;
 const MARGIN = { top: 28, right: 12, bottom: 28, left: 44 };
 const TASK_NAMES = {
-  NBACK: "N-back",
-  DIGITSPAN: "Digit span",
-  STROOP: "Stroop",
-  FLUENCY: "Fluency",
+  NBACK: "Letter Match",
+  DIGITSPAN: "Number Recall",
+  STROOP: "Color Clash",
+  FLUENCY: "Animal Sprint",
 };
 
 function svgElement(name, attributes = {}, text = null) {

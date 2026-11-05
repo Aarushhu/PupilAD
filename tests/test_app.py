@@ -1,20 +1,23 @@
 import json
+import time
 
 import numpy as np
 import pandas as pd
 import pytest
 
 flask = pytest.importorskip("flask")
-pytest.importorskip("cv2")
+cv2 = pytest.importorskip("cv2")
 
-from pupilad.app.camera import clock
 from pupilad.app.server import TASK_COLUMNS, binned_trace, create_app
 from pupilad.webcam.trial_table import build_trial_table
+
+START = 1234.5
+EPOCH_MS = 1_793_000_000_000.0
 
 
 @pytest.fixture
 def client(tmp_path):
-    app = create_app(tmp_path, camera_index=0)
+    app = create_app(tmp_path, auto_process=False)
     with app.test_client() as test_client:
         test_client.logs_dir = tmp_path
         yield test_client
@@ -25,36 +28,37 @@ def nback_rows(start):
     rows = []
     for index, letter in enumerate(letters):
         is_match = index >= 2 and letter == letters[index - 2]
-        responded = index in (2, 4)
+        said_match = index in (2, 4)
         rows.append(
             {
                 "trial": index,
                 "letter": letter,
                 "is_match": is_match,
-                "responded": responded,
-                "rt": 0.41 if responded else None,
-                "correct": responded == is_match,
+                "responded": said_match,
+                "rt": 0.41 if said_match else 0.62,
+                "correct": said_match == is_match,
                 "onset_time": start + 2.0 * index,
+                "response": "match" if said_match else "no_match",
             }
         )
     return rows
 
 
 def stroop_rows(start):
-    trials = [("red", "red", "r", 0.5), ("red", "blue", "b", 0.7), ("green", "yellow", None, None)]
+    trials = [("red", "red", "red", 0.5), ("red", "blue", "blue", 0.7), ("green", "yellow", None, None)]
     return [
         {
             "trial": index,
             "word": word,
             "ink_color": ink,
             "is_congruent": word == ink,
-            "responded": key is not None,
-            "response_color": {"r": "red", "b": "blue"}.get(key),
+            "responded": answer is not None,
+            "response_color": answer,
             "rt": rt,
-            "correct": {"r": "red", "b": "blue"}.get(key) == ink,
+            "correct": answer == ink,
             "onset_time": start + 20 + index * 3.5,
         }
-        for index, (word, ink, key, rt) in enumerate(trials)
+        for index, (word, ink, answer, rt) in enumerate(trials)
     ]
 
 
@@ -90,20 +94,36 @@ def digit_rows(start):
     ]
 
 
-def run_session(client, subject_id="T01"):
-    start = clock()
-    response = client.post(
-        "/api/session/start",
-        json={"subject_id": subject_id, "session": "1", "record_webcam": False, "tasks": []},
+def mark(client, label, t):
+    return client.post(
+        "/api/session/marker", json={"label": label, "t": t, "epoch_ms": EPOCH_MS + (t - START) * 1000}
     )
+
+
+def start_session(client, subject_id="T01", **extra):
+    body = {"subject_id": subject_id, "session": "1", "record_webcam": False, "tasks": [], **extra}
+    return client.post("/api/session/start", json=body)
+
+
+def run_session(client, subject_id="T01"):
+    response = start_session(client, subject_id)
     assert response.status_code == 200, response.json
-    client.post("/api/session/marker", json={"label": "NBACK_START", "t": start})
-    client.post("/api/session/results", json={"task": "nback", "rows": nback_rows(start)})
-    client.post("/api/session/marker", json={"label": "NBACK_END", "t": start + 16})
-    client.post("/api/session/results", json={"task": "stroop", "rows": stroop_rows(start)})
-    client.post("/api/session/results", json={"task": "digitspan", "rows": digit_rows(start)})
+    mark(client, "NBACK_START", START)
+    client.post("/api/session/results", json={"task": "nback", "rows": nback_rows(START)})
+    mark(client, "NBACK_END", START + 16)
+    client.post("/api/session/results", json={"task": "stroop", "rows": stroop_rows(START)})
+    client.post("/api/session/results", json={"task": "digitspan", "rows": digit_rows(START)})
     assert client.post("/api/session/finish", json={"aborted": False}).status_code == 200
-    return start
+    return START
+
+
+def make_video(path, frames=45, fps=30):
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (160, 120))
+    for index in range(frames):
+        frame = np.full((120, 160, 3), index * 4 % 255, dtype=np.uint8)
+        writer.write(frame)
+    writer.release()
+    return path.read_bytes()
 
 
 def test_session_writes_battery_compatible_files(client):
@@ -115,6 +135,7 @@ def test_session_writes_battery_compatible_files(client):
     markers = pd.read_csv(logs / "T01_markers.csv")
     assert list(markers.columns) == ["wall_clock_time", "psychopy_clock_time", "event"]
     assert list(markers["event"]) == ["NBACK_START", "NBACK_END"]
+    assert markers["psychopy_clock_time"].tolist() == [START, START + 16]
     meta = json.loads((logs / "T01_session.json").read_text())
     assert meta["aborted"] is False
     assert sorted(meta["tasks_saved"]) == ["digitspan", "nback", "stroop"]
@@ -122,20 +143,13 @@ def test_session_writes_battery_compatible_files(client):
 
 def test_existing_subject_requires_overwrite(client):
     run_session(client)
-    response = client.post("/api/session/start", json={"subject_id": "T01", "record_webcam": False})
-    assert response.status_code == 409
-    response = client.post(
-        "/api/session/start", json={"subject_id": "T01", "record_webcam": False, "overwrite": True}
-    )
-    assert response.status_code == 200
+    assert start_session(client).status_code == 409
+    assert start_session(client, overwrite=True).status_code == 200
     assert not (client.logs_dir / "T01_nback.csv").exists()
 
 
 def test_rejects_unsafe_subject_id(client):
-    response = client.post(
-        "/api/session/start", json={"subject_id": "../evil", "record_webcam": False}
-    )
-    assert response.status_code == 400
+    assert start_session(client, "../evil").status_code == 400
 
 
 def test_summary_scores(client):
@@ -191,5 +205,65 @@ def test_binned_trace_keeps_gaps():
 
 
 def test_marker_without_session_is_rejected(client):
-    response = client.post("/api/session/marker", json={"label": "X", "t": 1.0})
-    assert response.status_code == 409
+    assert mark(client, "X", 1.0).status_code == 409
+
+
+def test_uploaded_video_becomes_aligned_mp4_and_timestamps(client, tmp_path):
+    data = make_video(tmp_path / "source.mp4")
+    assert start_session(client, "V01", record_webcam=True).status_code == 200
+    half = len(data) // 2
+    for seq, part in enumerate([data[:half], data[half:]]):
+        response = client.post(f"/api/session/media/video?seq={seq}&mime=video/mp4", data=part)
+        assert response.status_code == 200, response.json
+    assert client.post("/api/session/media/video?seq=0&mime=video/mp4", data=data[:half]).json["next"] == 2
+    assert client.post("/api/session/media/video?seq=5&mime=video/mp4", data=b"x").status_code == 409
+    recording = {"mime": "video/mp4", "start_s": START, "start_epoch_ms": EPOCH_MS, "duration_s": 1.5}
+    client.post("/api/session/finish", json={"aborted": False, "recording": recording})
+    assert (client.logs_dir / "V01_webcam_raw.mp4").read_bytes() == data
+
+    client.post("/api/sessions/V01/analyze", json={})
+    for _ in range(100):
+        job = client.get("/api/sessions/V01/job").json
+        if job["state"] != "running":
+            break
+        time.sleep(0.1)
+    assert job["state"] == "done", job
+    stamps = pd.read_csv(client.logs_dir / "V01_webcam_frame_timestamps.csv")
+    assert list(stamps.columns) == ["frame_index", "wall_clock_time", "psychopy_clock_time"]
+    assert len(stamps) == 45
+    assert stamps["psychopy_clock_time"].iloc[0] == pytest.approx(START)
+    assert stamps["psychopy_clock_time"].iloc[-1] == pytest.approx(START + 44 / 30, abs=0.002)
+    assert (client.logs_dir / "V01_webcam.mp4").exists()
+    assert (client.logs_dir / "V01_pupil_trace.csv").exists()
+    meta = client.get("/api/sessions/V01").json["meta"]
+    assert meta["webcam"]["frames"] == 45
+    assert meta["pupil_detect_rate"] == 0.0
+
+
+def test_audio_upload_is_saved_with_its_extension(client):
+    start_session(client, "A01")
+    client.post("/api/session/media/audio?seq=0&mime=audio/webm;codecs=opus", data=b"abc")
+    client.post("/api/session/media/audio?seq=1&mime=audio/webm;codecs=opus", data=b"def")
+    client.post("/api/session/finish", json={"aborted": False})
+    assert (client.logs_dir / "A01_fluency_audio.webm").read_bytes() == b"abcdef"
+    assert client.get("/api/sessions/A01").json["files"]["_fluency_audio.webm"] is True
+
+
+def test_camera_check_reports_no_face_on_blank_frame(client):
+    ok, jpeg = cv2.imencode(".jpg", np.full((240, 320, 3), 128, dtype=np.uint8))
+    result = client.post("/api/camera/check", data=jpeg.tobytes()).json
+    assert result == {"width": 320, "height": 240, "face": None, "eyes": 0, "pupil_px": None}
+    assert client.post("/api/camera/check", data=b"not an image").status_code == 400
+
+
+def test_lan_access_requires_key(tmp_path):
+    app = create_app(tmp_path, access_key="secret123", lan_url="https://10.0.0.5:5050/?key=secret123")
+    remote = {"REMOTE_ADDR": "10.0.0.9"}
+    with app.test_client() as test_client:
+        assert test_client.get("/api/info", environ_base=remote).status_code == 403
+        response = test_client.get("/?key=secret123", environ_base=remote)
+        assert response.status_code == 302
+        assert "pupilad_key=secret123" in response.headers["Set-Cookie"]
+        assert test_client.get("/api/info", environ_base=remote).json["lan_url"] is None
+    with app.test_client() as local_client:
+        assert local_client.get("/api/info").json["lan_url"].startswith("https://10.0.0.5")

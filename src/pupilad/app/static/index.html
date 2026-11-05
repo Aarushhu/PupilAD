@@ -2,79 +2,123 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0A7C76">
   <title>PupilAD</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3E%3Ccircle cx='15' cy='15' r='14' fill='%230A7C76'/%3E%3Cellipse cx='15' cy='15' rx='9' ry='6' fill='none' stroke='white' stroke-width='2'/%3E%3Ccircle cx='15' cy='15' r='3' fill='white'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-  <header class="topbar" id="topbar">
-    <span class="brand">PupilAD</span>
-    <nav>
-      <button class="tab active" data-view="setup">New session</button>
-      <button class="tab" data-view="results">Results</button>
-    </nav>
-  </header>
-
-  <main id="view-setup" class="view">
-    <section class="card">
-      <h2>1. Participant</h2>
-      <div class="grid2">
-        <label>Subject ID <input id="subject-id" autocomplete="off" placeholder="e.g. P001"></label>
-        <label>Session <input id="session-number" value="1"></label>
+  <div id="shell">
+    <header class="appbar main-bar">
+      <div class="logo">
+        <svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><circle cx="15" cy="15" r="14" fill="#0A7C76"/><ellipse cx="15" cy="15" rx="9" ry="6" fill="none" stroke="#fff" stroke-width="2"/><circle cx="15" cy="15" r="3" fill="#fff"/></svg>
+        PupilAD
       </div>
-      <label>Notes (optional) <input id="session-notes" autocomplete="off" placeholder="room, lighting, glasses…"></label>
-    </section>
+      <nav class="tabs" aria-label="Main">
+        <button class="tab" type="button" data-view="setup">New session</button>
+        <button class="tab" type="button" data-view="results">Results</button>
+      </nav>
+    </header>
 
-    <section class="card">
-      <h2>2. Camera check</h2>
-      <div class="camera-row">
-        <div class="preview-wrap"><img id="camera-preview" alt="Webcam preview"></div>
-        <div class="camera-info">
-          <label>Camera <select id="camera-index"></select></label>
-          <dl id="camera-stats"></dl>
-          <p class="hint">Seat the participant so their face fills the middle of the frame, with even
-            light and no glare on glasses. Aim for pupil detection above 50% before starting.</p>
-          <label class="check"><input type="checkbox" id="record-webcam" checked> Record webcam during the session</label>
+    <main id="view-setup" class="view">
+      <div class="content">
+        <div>
+          <div class="eyebrow">New session</div>
+          <h1 class="h1">Who is taking part today?</h1>
+        </div>
+        <div class="grid2">
+          <section class="card">
+            <label class="field">Participant ID
+              <input id="subject-id" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="e.g. P001">
+            </label>
+            <div class="grid-fields">
+              <label class="field">Session <input id="session-number" value="1" inputmode="numeric"></label>
+              <label class="field">Notes (optional) <input id="session-notes" autocomplete="off" placeholder="room, lighting, glasses…"></label>
+            </div>
+            <div id="subject-warning" class="notice warn" hidden></div>
+            <div class="chips" id="device-chips"></div>
+          </section>
+          <section class="card">
+            <h2 class="h2">Tasks in this session</h2>
+            <div class="tasklist" id="task-list"></div>
+            <details class="advanced">
+              <summary>Advanced settings</summary>
+              <div class="settings-grid" id="settings-grid"></div>
+              <button class="link" id="reset-settings" type="button">Reset to defaults</button>
+            </details>
+          </section>
+        </div>
+        <section class="card lan-card" id="lan-card" hidden>
+          <div class="ticon t2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg></div>
+          <div>
+            <b>Run on a phone or iPad</b>
+            <p class="muted">On the same Wi-Fi, open this link (it includes an access key, so share it only with your team):</p>
+            <code id="lan-url"></code>
+          </div>
+        </section>
+        <p id="setup-error" class="notice error" hidden></p>
+        <div class="actions"><button class="btn btn-primary" id="to-camera" type="button">Continue to camera check</button></div>
+      </div>
+    </main>
+
+    <main id="view-camera" class="view" hidden>
+      <div class="content">
+        <div>
+          <div class="eyebrow">Camera check</div>
+          <h1 class="h1">Line your face up with the oval</h1>
+          <p class="lede">Hold the device at arm's length, level with your eyes. Keep your head still once the oval turns green.</p>
+        </div>
+        <div class="grid2 camgrid">
+          <div class="camview" id="camview">
+            <video id="cam-video" muted playsinline autoplay></video>
+            <svg class="oval" viewBox="0 0 400 300" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+              <ellipse id="oval" cx="200" cy="150" rx="88" ry="112"/>
+            </svg>
+            <div class="hint" id="cam-hint" hidden></div>
+          </div>
+          <section class="card">
+            <div class="checks" id="cam-checks"></div>
+            <div class="meter-block">
+              <div class="meter-row"><span>Pupil found</span><b id="pupil-rate">–</b></div>
+              <div class="meter"><i id="pupil-meter"></i></div>
+              <span class="muted small">Aim for 50% or more before starting.</span>
+            </div>
+            <div class="mic-check" id="mic-check" hidden>
+              <div class="meter-row"><span>Microphone</span><span class="muted small" id="mic-status">Say something</span></div>
+              <div class="meter"><i id="mic-meter"></i></div>
+            </div>
+            <label class="field" id="camera-select-wrap" hidden>Camera <select id="camera-select"></select></label>
+          </section>
+        </div>
+        <p id="camera-error" class="notice error" hidden></p>
+        <div class="actions">
+          <button class="btn btn-ghost" id="cam-back" type="button">Back</button>
+          <button class="btn btn-primary" id="cam-continue" type="button" disabled>Looks good, continue</button>
         </div>
       </div>
-    </section>
+    </main>
 
-    <section class="card">
-      <h2>3. Tasks</h2>
-      <div class="task-list" id="task-list"></div>
-      <details>
-        <summary>Advanced settings</summary>
-        <div class="grid3" id="settings-grid"></div>
-        <button class="link" id="reset-settings" type="button">Reset to defaults</button>
-      </details>
-    </section>
-
-    <section class="card start-card">
-      <p class="hint">The battery runs full-screen. Participants use the keyboard only.
-        Experimenter: press <kbd>Shift</kbd>+<kbd>Esc</kbd> at any time to abort; completed tasks are kept.</p>
-      <p id="setup-error" class="error" hidden></p>
-      <button class="primary" id="start-button">Start session</button>
-    </section>
-  </main>
-
-  <main id="view-results" class="view" hidden>
-    <section class="card">
-      <h2>Sessions</h2>
-      <p class="hint">Data folder: <code id="data-folder"></code></p>
-      <table class="sessions" id="sessions-table">
-        <thead><tr><th>Subject</th><th>Session</th><th>Started</th><th>Video</th><th>Pupil trace</th><th></th></tr></thead>
-        <tbody></tbody>
-      </table>
-      <p id="sessions-empty" class="hint" hidden>No sessions recorded yet.</p>
-    </section>
-    <section class="card" id="session-detail" hidden></section>
-  </main>
-
-  <div id="stage" hidden>
-    <div id="stage-progress" class="stage-progress"></div>
-    <div id="stage-center" class="stage-center"></div>
-    <div id="stage-reminder" class="stage-reminder"></div>
+    <main id="view-results" class="view" hidden>
+      <div class="content wide">
+        <div class="results-head">
+          <div>
+            <div class="eyebrow">Results</div>
+            <h1 class="h1">Sessions</h1>
+          </div>
+          <p class="muted small">Data folder: <code id="data-folder"></code></p>
+        </div>
+        <div class="dash">
+          <div class="sessions" id="sessions-list"></div>
+          <section class="detail" id="session-detail">
+            <div class="card empty-detail">Choose a session to see its scores and pupil data.</div>
+          </section>
+        </div>
+      </div>
+    </main>
   </div>
+
+  <div id="play" hidden></div>
 
   <script type="module" src="/static/app.js"></script>
 </body>

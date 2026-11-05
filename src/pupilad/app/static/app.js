@@ -1,9 +1,29 @@
-import { DEFAULT_SETTINGS, SETTING_LABELS, TASKS, requestAbort, runBattery } from "./battery.js";
+import { DEFAULT_SETTINGS, SETTING_LABELS, TASKS, requestAbort, runBattery, taskIcon } from "./battery.js";
 import { renderTraceChart } from "./chart.js";
+import {
+  Recorder,
+  grabFrame,
+  levelMeter,
+  listCameras,
+  mediaSupport,
+  openCamera,
+  openMicrophone,
+  regionBrightness,
+  stopStream,
+} from "./media.js";
 
 const $ = (id) => document.getElementById(id);
-const SETTINGS_KEY = "pupilad.settings";
+const SETTINGS_KEY = "pupilad.settings.v2";
 const TASKS_KEY = "pupilad.tasks";
+const CAMERA_KEY = "pupilad.camera";
+const CHECK_INTERVAL_MS = 700;
+const HOLD_TO_STOP_MS = 1500;
+const ICON_OK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg>';
+const ICON_WARN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><path d="M12 7v6M12 17h.01"/></svg>';
+const ICON_WAIT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><path d="M8 12h.01M12 12h.01M16 12h.01"/></svg>';
+
+const escapeHtml = (text) =>
+  String(text ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
 async function api(path, body) {
   const options = body === undefined ? {} : {
@@ -17,34 +37,6 @@ async function api(path, body) {
   return data;
 }
 
-async function syncClock(samples = 15) {
-  let best = null;
-  for (let i = 0; i < samples; i++) {
-    const sent = performance.now();
-    const { t } = await api("/api/clock");
-    const received = performance.now();
-    const rtt = received - sent;
-    if (best === null || rtt < best.rtt_ms) {
-      best = { rtt_ms: rtt, offset_s: t - (sent + received) / 2000 };
-    }
-  }
-  return { ...best, samples };
-}
-
-function showView(name) {
-  for (const tab of document.querySelectorAll(".tab")) {
-    tab.classList.toggle("active", tab.dataset.view === name);
-  }
-  $("view-setup").hidden = name !== "setup";
-  $("view-results").hidden = name !== "results";
-  setPreview(name === "setup");
-  if (name === "results") loadSessions();
-}
-
-for (const tab of document.querySelectorAll(".tab")) {
-  tab.addEventListener("click", () => showView(tab.dataset.view));
-}
-
 function loadJson(key, fallback) {
   try {
     return { ...fallback, ...JSON.parse(localStorage.getItem(key) || "{}") };
@@ -55,21 +47,45 @@ function loadJson(key, fallback) {
 
 let settings = loadJson(SETTINGS_KEY, DEFAULT_SETTINGS);
 let enabledTasks = loadJson(TASKS_KEY, Object.fromEntries(TASKS.map((t) => [t.id, true])));
+const selectedTasks = () => TASKS.filter((t) => enabledTasks[t.id] !== false).map((t) => t.id);
+
+function showView(name) {
+  for (const tab of document.querySelectorAll(".tab")) {
+    tab.classList.toggle("active", tab.dataset.view === (name === "camera" ? "setup" : name));
+  }
+  $("view-setup").hidden = name !== "setup";
+  $("view-camera").hidden = name !== "camera";
+  $("view-results").hidden = name !== "results";
+  if (name !== "camera") closeCameraCheck(true);
+  if (name === "results") loadSessions();
+  window.scrollTo(0, 0);
+}
+
+for (const tab of document.querySelectorAll(".tab")) {
+  tab.addEventListener("click", () => showView(tab.dataset.view));
+}
 
 function renderTaskList() {
   $("task-list").replaceChildren(
     ...TASKS.map((task) => {
-      const label = document.createElement("label");
-      label.className = "check";
+      const row = document.createElement("label");
+      row.className = "taskrow";
+      row.innerHTML = `
+        <div class="ticon ${task.tone}">${taskIcon(task.id)}</div>
+        <div><b>${task.name}</b><span>${task.science} · ${task.blurb.toLowerCase()}</span></div>`;
       const box = document.createElement("input");
       box.type = "checkbox";
+      box.className = "switch";
+      box.setAttribute("aria-label", `Include ${task.name}`);
       box.checked = enabledTasks[task.id] !== false;
+      row.classList.toggle("off", !box.checked);
       box.addEventListener("change", () => {
         enabledTasks[task.id] = box.checked;
+        row.classList.toggle("off", !box.checked);
         localStorage.setItem(TASKS_KEY, JSON.stringify(enabledTasks));
       });
-      label.append(box, task.name);
-      return label;
+      row.append(box);
+      return row;
     })
   );
 }
@@ -81,6 +97,8 @@ function renderSettings() {
       const input = document.createElement("input");
       input.type = "number";
       input.step = "any";
+      input.min = "0";
+      input.inputMode = "decimal";
       input.value = settings[key];
       input.addEventListener("change", () => {
         const value = Number(input.value);
@@ -100,90 +118,35 @@ $("reset-settings").addEventListener("click", () => {
   renderSettings();
 });
 
-renderTaskList();
-renderSettings();
-
-const preview = $("camera-preview");
-let statusTimer = null;
-
-function setPreview(on) {
-  clearInterval(statusTimer);
-  if (on) {
-    preview.src = `/api/camera/stream?ts=${Date.now()}`;
-    statusTimer = setInterval(refreshCameraStatus, 1000);
-    refreshCameraStatus();
-  } else {
-    preview.removeAttribute("src");
-  }
+function chip(text, tone = "") {
+  const icon = tone === "" ? ICON_OK : ICON_WARN;
+  return `<span class="pill ${tone}">${icon}${escapeHtml(text)}</span>`;
 }
 
-function setStats(entries) {
-  $("camera-stats").replaceChildren(
-    ...entries.flatMap(([term, value, className]) => {
-      const dt = document.createElement("dt");
-      dt.textContent = term;
-      const dd = document.createElement("dd");
-      dd.textContent = value;
-      if (className) dd.className = className;
-      return [dt, dd];
-    })
-  );
-}
-
-async function refreshCameraStatus() {
+async function renderDeviceChips() {
+  const support = mediaSupport();
+  const chips = [];
+  if (!support.secure) chips.push(chip("Camera needs https or localhost", "bad"));
+  else if (!support.camera || !support.recorder) chips.push(chip("This browser can't record video", "bad"));
+  else chips.push(chip("Camera recording supported"));
   try {
-    const status = await api("/api/camera/status");
-    if (status.error) {
-      setStats([["Status", status.error, "error"]]);
-      return;
+    const battery = await navigator.getBattery?.();
+    if (battery && !battery.charging && battery.level < 0.4) {
+      chips.push(chip(`Battery ${Math.round(battery.level * 100)}%: plug in`, "warn"));
     }
-    const rate = status.pupil_detect_rate;
-    setStats([
-      ["Status", status.running ? "Live" : "Starting…"],
-      ["Resolution", status.frame_size ? status.frame_size.join(" × ") : "–"],
-      ["Frame rate", status.fps ? `${status.fps.toFixed(1)} fps` : "–"],
-      [
-        "Pupil detected",
-        rate === null ? "–" : `${Math.round(rate * 100)}% of recent checks`,
-        rate === null ? "" : rate >= 0.5 ? "ok" : "error",
-      ],
-      [
-        "Pupil size",
-        status.last_diameter_px ? `${status.last_diameter_px.toFixed(1)} px` : "–",
-      ],
-    ]);
-  } catch (error) {
-    setStats([["Status", `Server unreachable: ${error.message}`, "error"]]);
+  } catch {
   }
+  $("device-chips").innerHTML = chips.join("");
 }
-
-for (let index = 0; index < 5; index++) {
-  const option = document.createElement("option");
-  option.value = index;
-  option.textContent = `Camera ${index}`;
-  $("camera-index").append(option);
-}
-api("/api/camera/status").then((status) => ($("camera-index").value = status.index));
-$("camera-index").addEventListener("change", async (event) => {
-  try {
-    await api("/api/camera/select", { index: Number(event.target.value) });
-    setPreview(true);
-  } catch (error) {
-    showSetupError(error.message);
-  }
-});
 
 let existingFiles = [];
-let overwriteBox = null;
+let checkTimer = null;
 
-function showSetupError(message, extra = null) {
-  const box = $("setup-error");
-  box.hidden = !message;
-  box.replaceChildren(message || "");
-  if (extra) box.append(document.createElement("br"), extra);
+function showSetupError(message) {
+  $("setup-error").hidden = !message;
+  $("setup-error").textContent = message || "";
 }
 
-let checkTimer = null;
 $("subject-id").addEventListener("input", () => {
   clearTimeout(checkTimer);
   checkTimer = setTimeout(checkSubject, 300);
@@ -191,8 +154,9 @@ $("subject-id").addEventListener("input", () => {
 
 async function checkSubject() {
   const subjectId = $("subject-id").value.trim();
+  const warning = $("subject-warning");
   existingFiles = [];
-  overwriteBox = null;
+  warning.hidden = true;
   showSetupError("");
   if (!subjectId) return;
   try {
@@ -202,21 +166,344 @@ async function checkSubject() {
     return;
   }
   if (existingFiles.length) {
-    const label = document.createElement("label");
-    label.className = "check";
-    overwriteBox = document.createElement("input");
-    overwriteBox.type = "checkbox";
-    label.append(overwriteBox, "Overwrite the existing files");
-    showSetupError(`${subjectId} already has recorded data (${existingFiles.length} files).`, label);
+    warning.innerHTML = `
+      <span><b>${escapeHtml(subjectId)}</b> already has recorded data (${existingFiles.length} files).</span>
+      <label class="check-line"><input type="checkbox" id="overwrite"> Replace the existing files</label>`;
+    warning.hidden = false;
   }
 }
 
-let sessionRunning = false;
+const overwriteChecked = () => Boolean($("overwrite")?.checked);
+
+async function loadInfo() {
+  try {
+    const info = await api("/api/info");
+    if (info.lan_url) {
+      $("lan-url").textContent = info.lan_url;
+      $("lan-card").hidden = false;
+    }
+  } catch {
+  }
+}
+
+const camera = {
+  stream: null,
+  microphone: null,
+  meter: null,
+  timer: null,
+  busy: false,
+  history: [],
+  canvas: document.createElement("canvas"),
+  usable: false,
+};
+
+function closeCameraCheck(releaseStreams) {
+  clearInterval(camera.timer);
+  camera.timer = null;
+  cancelAnimationFrame(camera.micFrame);
+  if (releaseStreams) {
+    camera.meter?.close();
+    camera.meter = null;
+    stopStream(camera.stream);
+    stopStream(camera.microphone);
+    camera.stream = null;
+    camera.microphone = null;
+    $("cam-video").srcObject = null;
+  }
+}
+
+function showCameraError(message) {
+  $("camera-error").hidden = !message;
+  $("camera-error").textContent = message || "";
+}
+
+function validateSetup() {
+  const subjectId = $("subject-id").value.trim();
+  if (!subjectId) return "Enter a participant ID first.";
+  if (!/^[A-Za-z0-9_-]{1,40}$/.test(subjectId)) return "Participant ID may only contain letters, digits, '-' and '_' (max 40).";
+  if (!selectedTasks().length) return "Switch on at least one task.";
+  if (existingFiles.length && !overwriteChecked()) return `${subjectId} already has recorded data. Tick "Replace the existing files" or use a different ID.`;
+  return null;
+}
+
+$("to-camera").addEventListener("click", async () => {
+  clearTimeout(checkTimer);
+  await checkSubject();
+  const problem = validateSetup();
+  if (problem) return showSetupError(problem);
+  showSetupError("");
+  showView("camera");
+  await startCameraCheck();
+});
+
+$("cam-back").addEventListener("click", () => showView("setup"));
+
+async function populateCameraSelect() {
+  const cameras = await listCameras().catch(() => []);
+  const select = $("camera-select");
+  $("camera-select-wrap").hidden = cameras.length < 2;
+  const current = camera.stream?.getVideoTracks()[0]?.getSettings().deviceId;
+  select.replaceChildren(
+    ...cameras.map((device, index) => {
+      const option = document.createElement("option");
+      option.value = device.deviceId;
+      option.textContent = device.label || `Camera ${index + 1}`;
+      option.selected = device.deviceId === current;
+      return option;
+    })
+  );
+}
+
+$("camera-select").addEventListener("change", async (event) => {
+  localStorage.setItem(CAMERA_KEY, event.target.value);
+  closeCameraCheck(false);
+  stopStream(camera.stream);
+  camera.stream = null;
+  await startCameraCheck();
+});
+
+function renderChecks(items) {
+  $("cam-checks").innerHTML = items
+    .map(({ state, title, detail }) => {
+      const icon = state === "ok" ? ICON_OK : state === "warn" ? ICON_WARN : ICON_WAIT;
+      return `<div class="check ${state}"><span class="dot">${icon}</span><div>${title}<small>${detail}</small></div></div>`;
+    })
+    .join("");
+}
+
+function evaluateFrame(result, brightness) {
+  const face = result.face;
+  const checks = [];
+  let tip = null;
+  if (!face) {
+    checks.push({ state: "warn", title: "Face centred", detail: "No face found yet" });
+    tip = "Move so your whole face is inside the oval, looking at the screen.";
+  } else {
+    const cx = face.x + face.w / 2;
+    const cy = face.y + face.h / 2;
+    const centred = cx > 0.32 && cx < 0.68 && cy > 0.25 && cy < 0.7;
+    checks.push({ state: centred ? "ok" : "warn", title: "Face centred", detail: centred ? "Inside the oval" : "Move toward the middle" });
+    if (!centred) tip ??= "Move your face toward the middle of the oval.";
+  }
+  const eyesOk = result.eyes >= 2 || result.pupil_px !== null;
+  checks.push({
+    state: !face ? "wait" : eyesOk ? "ok" : "warn",
+    title: "Eyes found",
+    detail: !face ? "Waiting for a face" : eyesOk ? "No glare on glasses" : "Look straight at the screen",
+  });
+  if (face && !eyesOk) tip ??= "Look straight at the screen. If you wear glasses, tilt them slightly to remove glare.";
+  let lightState = "wait";
+  let lightDetail = "Waiting for a face";
+  if (face && brightness) {
+    const unevenness = Math.abs(brightness.left - brightness.right) / Math.max(1, brightness.mean);
+    if (brightness.mean < 70) {
+      lightState = "warn";
+      lightDetail = "Too dark";
+      tip ??= "It's a little dark. Turn on a light or face a window.";
+    } else if (brightness.mean > 215) {
+      lightState = "warn";
+      lightDetail = "Too bright";
+      tip ??= "Too much light on your face. Move away from a bright lamp or window.";
+    } else if (unevenness > 0.35) {
+      lightState = "warn";
+      lightDetail = "One side is in shadow";
+      tip ??= "One side of your face is in shadow. Face the light more evenly.";
+    } else {
+      lightState = "ok";
+      lightDetail = "Even light";
+    }
+  }
+  checks.push({ state: lightState, title: "Lighting", detail: lightDetail });
+  let distanceState = "wait";
+  let distanceDetail = "Waiting for a face";
+  if (face) {
+    if (face.w < 0.2) {
+      distanceState = "warn";
+      distanceDetail = "Too far away";
+      tip ??= "Move a little closer to the camera.";
+    } else if (face.w > 0.6) {
+      distanceState = "warn";
+      distanceDetail = "Too close";
+      tip ??= "Move back a little.";
+    } else {
+      distanceState = "ok";
+      distanceDetail = "Good distance";
+    }
+  }
+  checks.push({ state: distanceState, title: "Distance", detail: distanceDetail });
+  const aligned = checks[0].state === "ok" && distanceState === "ok";
+  return { checks, tip, aligned };
+}
+
+async function runCheck() {
+  const video = $("cam-video");
+  if (camera.busy || !video.videoWidth) return;
+  camera.busy = true;
+  try {
+    const context = grabFrame(video, camera.canvas);
+    const blob = await new Promise((resolve) => camera.canvas.toBlob(resolve, "image/jpeg", 0.85));
+    const response = await fetch("/api/camera/check", { method: "POST", body: blob });
+    if (!response.ok) return;
+    const result = await response.json();
+    const brightness = result.face ? regionBrightness(context, result.face) : null;
+    const { checks, tip, aligned } = evaluateFrame(result, brightness);
+    camera.history.push(result.pupil_px !== null);
+    if (camera.history.length > 12) camera.history.shift();
+    const rate = camera.history.filter(Boolean).length / camera.history.length;
+    renderChecks(checks);
+    $("pupil-rate").textContent = `${Math.round(rate * 100)}%`;
+    $("pupil-meter").style.width = `${Math.round(rate * 100)}%`;
+    $("pupil-meter").style.background = rate >= 0.5 ? "var(--brand)" : "var(--accent)";
+    $("oval").classList.toggle("ok", aligned);
+    $("cam-hint").hidden = !tip;
+    $("cam-hint").textContent = tip || "";
+  } catch {
+  } finally {
+    camera.busy = false;
+  }
+}
+
+function animateMic() {
+  if (!camera.meter) return;
+  const level = camera.meter.level();
+  $("mic-meter").style.width = `${Math.round(level * 100)}%`;
+  if (level > 0.15) $("mic-status").textContent = "Hearing you";
+  camera.micFrame = requestAnimationFrame(animateMic);
+}
+
+async function startCameraCheck() {
+  showCameraError("");
+  const button = $("cam-continue");
+  button.disabled = true;
+  button.textContent = "Looks good, continue";
+  camera.usable = false;
+  camera.history = [];
+  renderChecks([
+    { state: "wait", title: "Face centred", detail: "Starting the camera" },
+    { state: "wait", title: "Eyes found", detail: "" },
+    { state: "wait", title: "Lighting", detail: "" },
+    { state: "wait", title: "Distance", detail: "" },
+  ]);
+  const support = mediaSupport();
+  if (!support.secure || !support.camera || !support.recorder) {
+    showCameraError(
+      !support.secure
+        ? "The camera only works over https or on this computer's own address. Use the phone link shown on the setup page."
+        : "This browser can't record video. Try Chrome, Edge or Safari."
+    );
+    button.disabled = false;
+    button.textContent = "Continue without video";
+    return;
+  }
+  try {
+    if (!camera.stream) camera.stream = await openCamera(localStorage.getItem(CAMERA_KEY));
+  } catch (error) {
+    try {
+      if (error.name === "OverconstrainedError" || error.name === "NotFoundError") {
+        localStorage.removeItem(CAMERA_KEY);
+        camera.stream = await openCamera(null);
+      } else throw error;
+    } catch (second) {
+      showCameraError(
+        second.name === "NotAllowedError"
+          ? "Camera permission was blocked. Allow the camera in the browser's site settings, then try again."
+          : `Could not start the camera: ${second.message}`
+      );
+      button.disabled = false;
+      button.textContent = "Continue without video";
+      return;
+    }
+  }
+  const video = $("cam-video");
+  video.srcObject = camera.stream;
+  await video.play().catch(() => {});
+  camera.usable = true;
+  button.disabled = false;
+  populateCameraSelect();
+  if (selectedTasks().includes("fluency") && !camera.microphone) {
+    try {
+      camera.microphone = await openMicrophone();
+      camera.meter = levelMeter(camera.microphone);
+      await camera.meter?.resume();
+    } catch {
+      camera.microphone = null;
+    }
+  }
+  $("mic-check").hidden = !camera.microphone;
+  $("mic-status").textContent = camera.microphone ? "Say something" : "";
+  if (selectedTasks().includes("fluency") && !camera.microphone) {
+    showCameraError("The microphone isn't available, so Animal Sprint answers won't be recorded.");
+  }
+  animateMic();
+  clearInterval(camera.timer);
+  camera.timer = setInterval(runCheck, CHECK_INTERVAL_MS);
+  runCheck();
+}
+
+$("cam-continue").addEventListener("click", () => startSession());
+
+function deviceInfo() {
+  const ua = navigator.userAgent;
+  const touch = navigator.maxTouchPoints > 0;
+  const shortSide = Math.min(screen.width, screen.height);
+  let kind = "Computer";
+  if (/iPad/.test(ua) || (touch && /Macintosh/.test(ua))) kind = "Tablet";
+  else if (/iPhone|Android.+Mobile|Mobi/.test(ua)) kind = "Phone";
+  else if (/Android/.test(ua) && touch && shortSide >= 600) kind = "Tablet";
+  return {
+    kind,
+    touch,
+    screen: [screen.width, screen.height],
+    viewport: [innerWidth, innerHeight],
+    pixel_ratio: devicePixelRatio,
+  };
+}
+
+const session = {
+  running: false,
+  recorder: null,
+  events: [],
+  wakeLock: null,
+};
+
+function marker(label) {
+  const t = performance.now();
+  return api("/api/session/marker", { label, t: t / 1000, epoch_ms: performance.timeOrigin + t }).catch(() => {});
+}
+
+async function enterFullscreen() {
+  try {
+    if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+      await document.documentElement.requestFullscreen({ navigationUI: "hide" });
+    }
+    await navigator.keyboard?.lock?.(["Escape"]);
+  } catch {
+  }
+  try {
+    session.wakeLock = await navigator.wakeLock?.request("screen");
+  } catch {
+  }
+}
+
+async function leaveFullscreen() {
+  navigator.keyboard?.unlock?.();
+  session.wakeLock?.release().catch(() => {});
+  session.wakeLock = null;
+  if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (!session.running) return;
+  const label = document.hidden ? "PAGE_HIDDEN" : "PAGE_VISIBLE";
+  session.events.push({ event: label, t: performance.now() / 1000 });
+  marker(label);
+  if (!document.hidden && session.wakeLock === null) navigator.wakeLock?.request("screen").then((lock) => (session.wakeLock = lock)).catch(() => {});
+});
 
 window.addEventListener(
   "keydown",
   (event) => {
-    if (sessionRunning && event.key === "Escape" && event.shiftKey) {
+    if (session.running && event.key === "Escape" && event.shiftKey) {
       event.preventDefault();
       event.stopImmediatePropagation();
       requestAbort();
@@ -225,300 +512,342 @@ window.addEventListener(
   true
 );
 
-window.addEventListener("pagehide", () => {
-  if (sessionRunning) {
-    navigator.sendBeacon("/api/session/finish", JSON.stringify({ aborted: true }));
-  }
+let holdTimer = null;
+document.addEventListener("pointerdown", (event) => {
+  const button = event.target.closest("[data-hold-stop]");
+  if (!button) return;
+  event.preventDefault();
+  button.classList.add("holding");
+  clearTimeout(holdTimer);
+  holdTimer = setTimeout(() => {
+    button.classList.remove("holding");
+    requestAbort();
+  }, HOLD_TO_STOP_MS);
 });
-
-async function enterStage() {
-  $("stage").hidden = false;
-  $("topbar").hidden = true;
-  try {
-    await document.documentElement.requestFullscreen();
-    await navigator.keyboard?.lock?.(["Escape"]);
-  } catch {
-  }
-}
-
-async function leaveStage() {
-  $("stage").hidden = true;
-  $("topbar").hidden = false;
-  navigator.keyboard?.unlock?.();
-  if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
-}
-
-$("start-button").addEventListener("click", async () => {
-  const subjectId = $("subject-id").value.trim();
-  const tasks = TASKS.filter((t) => enabledTasks[t.id] !== false).map((t) => t.id);
-  if (!subjectId) return showSetupError("Enter a subject ID first.");
-  if (!tasks.length) return showSetupError("Select at least one task.");
-  if (existingFiles.length && !overwriteBox?.checked) {
-    return showSetupError(
-      `${subjectId} already has recorded data. Tick "Overwrite" or use a different ID.`
-    );
-  }
-  const button = $("start-button");
-  button.disabled = true;
-  showSetupError("");
-  const stagePromise = enterStage();
-  setPreview(false);
-  let clockStart;
-  try {
-    clockStart = await syncClock();
-    await api("/api/session/start", {
-      subject_id: subjectId,
-      session: $("session-number").value.trim(),
-      notes: $("session-notes").value.trim(),
-      record_webcam: $("record-webcam").checked,
-      overwrite: Boolean(overwriteBox?.checked),
-      settings,
-      tasks,
-      clock_sync: clockStart,
-    });
-  } catch (error) {
-    await stagePromise;
-    await leaveStage();
-    button.disabled = false;
-    setPreview(true);
-    return showSetupError(error.message);
-  }
-  await stagePromise;
-  sessionRunning = true;
-  const toServer = (ms) => ms / 1000 + clockStart.offset_s;
-  let outcome = { aborted: true };
-  let failure = null;
-  try {
-    outcome = await runBattery({
-      settings,
-      tasks,
-      toServer,
-      marker: (label) =>
-        api("/api/session/marker", { label, t: toServer(performance.now()) }).catch(() => {}),
-      saveResults: (task, rows) => api("/api/session/results", { task, rows }),
-    });
-  } catch (error) {
-    failure = error;
-  }
-  sessionRunning = false;
-  const clockEnd = await syncClock().catch(() => null);
-  await api("/api/session/finish", { aborted: outcome.aborted || failure !== null, clock_sync: clockEnd })
-    .catch(() => {});
-  await leaveStage();
-  button.disabled = false;
-  existingFiles = [];
-  overwriteBox = null;
-  $("subject-id").value = "";
-  if (failure) {
-    showView("setup");
-    showSetupError(`Session stopped because of an error: ${failure.message}`);
-    return;
-  }
-  showView("results");
-  openSession(subjectId);
-});
-
-function cell(text) {
-  const td = document.createElement("td");
-  td.textContent = text ?? "–";
-  return td;
-}
-
-function formatDate(iso) {
-  return iso ? new Date(iso).toLocaleString() : "–";
-}
-
-async function loadSessions() {
-  const { sessions, logs_dir: logsDir } = await api("/api/sessions");
-  $("data-folder").textContent = logsDir;
-  const body = $("sessions-table").querySelector("tbody");
-  $("sessions-empty").hidden = sessions.length > 0;
-  $("sessions-table").hidden = sessions.length === 0;
-  body.replaceChildren(
-    ...sessions.map((row) => {
-      const tr = document.createElement("tr");
-      tr.dataset.subject = row.subject_id;
-      const open = document.createElement("button");
-      open.className = "secondary";
-      open.textContent = "Open";
-      open.addEventListener("click", () => openSession(row.subject_id));
-      const actions = document.createElement("td");
-      actions.append(open);
-      tr.append(
-        cell(row.subject_id + (row.aborted ? " (aborted)" : "")),
-        cell(row.session),
-        cell(row.source === "psychopy" ? "PsychoPy run" : formatDate(row.started_at)),
-        cell(row.has_video ? "Yes" : "No"),
-        cell(row.has_trace ? "Extracted" : "Not yet"),
-        actions
-      );
-      return tr;
-    })
+for (const type of ["pointerup", "pointercancel", "pointerleave"]) {
+  document.addEventListener(
+    type,
+    (event) => {
+      const button = event.target.closest?.("[data-hold-stop]");
+      if (!button && type === "pointerleave") return;
+      clearTimeout(holdTimer);
+      document.querySelectorAll(".holding").forEach((b) => b.classList.remove("holding"));
+    },
+    true
   );
 }
 
-function tile(label, value, sub = "") {
-  const element = document.createElement("div");
-  element.className = "tile";
-  element.innerHTML = `<div class="label"></div><div class="value"></div><div class="sub"></div>`;
-  element.querySelector(".label").textContent = label;
-  element.querySelector(".value").textContent = value ?? "–";
-  element.querySelector(".sub").textContent = sub;
-  return element;
+window.addEventListener("pagehide", () => {
+  if (!session.running) return;
+  navigator.sendBeacon(
+    "/api/session/finish",
+    JSON.stringify({ aborted: true, recording: session.recorder?.info(), events: session.events })
+  );
+});
+
+function playScreen(html) {
+  $("play").innerHTML = `<div class="play-light"><div class="content">${html}</div></div>`;
+}
+
+async function startSession() {
+  const problem = validateSetup();
+  if (problem) {
+    showView("setup");
+    return showSetupError(problem);
+  }
+  const subjectId = $("subject-id").value.trim();
+  const tasks = selectedTasks();
+  const record = camera.usable && camera.stream !== null;
+  closeCameraCheck(false);
+  camera.meter?.close();
+  camera.meter = null;
+  session.events = [];
+  session.recorder = null;
+  $("shell").hidden = true;
+  $("play").hidden = false;
+  let audioInfo = null;
+  const ctx = {
+    settings: { ...settings },
+    tasks,
+    microphone: camera.microphone,
+    marker,
+    saveResults: (task, rows) => api("/api/session/results", { task, rows }),
+    begin: async () => {
+      await enterFullscreen();
+      const device = deviceInfo();
+      if (record) {
+        const { deviceId, groupId, ...settings } = camera.stream.getVideoTracks()[0]?.getSettings() || {};
+        device.camera = settings;
+      }
+      await api("/api/session/start", {
+        subject_id: subjectId,
+        session: $("session-number").value.trim(),
+        notes: $("session-notes").value.trim(),
+        record_webcam: record,
+        overwrite: overwriteChecked(),
+        settings: ctx.settings,
+        tasks,
+        device,
+      });
+      session.running = true;
+      if (record) {
+        session.recorder = new Recorder(camera.stream, "video");
+        await session.recorder.start();
+      }
+      marker("SESSION_BEGAN");
+    },
+  };
+  let outcome = { aborted: true };
+  let failure = null;
+  try {
+    outcome = await runBattery(ctx);
+  } catch (error) {
+    failure = error;
+  }
+  audioInfo = ctx.audioInfo ?? null;
+  const started = session.running;
+  if (started) await marker(outcome.aborted ? "SESSION_STOPPED" : "SESSION_COMPLETE");
+  playScreen(`
+    <div class="saving">
+      <div class="done-badge">${ICON_OK}</div>
+      <h1 class="h1">${failure ? "Something went wrong" : outcome.aborted ? "Session stopped" : "All done, thank you!"}</h1>
+      <p class="lede" id="save-text">${started ? "Saving the recording…" : ""}</p>
+      <div class="progress" ${started && session.recorder ? "" : "hidden"}><i id="save-bar"></i></div>
+    </div>`);
+  let progressTimer = null;
+  let recording = null;
+  if (session.recorder) {
+    progressTimer = setInterval(() => {
+      $("save-bar").style.width = `${Math.round(session.recorder.progress() * 100)}%`;
+    }, 250);
+    recording = await session.recorder.stop();
+    clearInterval(progressTimer);
+  }
+  session.running = false;
+  let saveError = null;
+  if (started) {
+    try {
+      await api("/api/session/finish", {
+        aborted: outcome.aborted || failure !== null,
+        recording,
+        audio: audioInfo,
+        practice: ctx.practice,
+        events: session.events,
+      });
+    } catch (error) {
+      saveError = error.message;
+    }
+  }
+  closeCameraCheck(true);
+  await leaveFullscreen();
+  const uploadProblem = recording?.upload_error || audioInfo?.upload_error;
+  const messages = [];
+  if (failure) messages.push(`The session stopped because of an error: ${escapeHtml(failure.message)}`);
+  if (saveError) messages.push(`Could not save the session: ${escapeHtml(saveError)}`);
+  if (uploadProblem) messages.push(`Part of the recording could not be uploaded: ${escapeHtml(uploadProblem)}`);
+  if (!started) messages.push("The session was stopped before it began, so nothing was saved.");
+  $("play").innerHTML = `
+    <div class="play-light"><div class="content">
+      <div class="saving">
+        <div class="done-badge">${ICON_OK}</div>
+        <h1 class="h1">${failure ? "Something went wrong" : outcome.aborted ? "Session stopped" : "All done, thank you!"}</h1>
+        <p class="lede">${messages.length ? messages.join("<br>") : outcome.aborted ? "Finished tasks were saved." : "Please hand the device back to the researcher."}</p>
+        <button class="btn btn-primary" type="button" id="play-close">${started ? "See results" : "Back to setup"}</button>
+      </div>
+    </div></div>`;
+  await new Promise((resolve) => $("play-close").addEventListener("click", resolve, { once: true }));
+  $("play").hidden = true;
+  $("play").innerHTML = "";
+  $("shell").hidden = false;
+  existingFiles = [];
+  $("subject-warning").hidden = true;
+  if (!started) return showView("setup");
+  $("subject-id").value = "";
+  showView("results");
+  openSession(subjectId);
 }
 
 const percent = (value) => (value === null || value === undefined ? "–" : `${Math.round(value * 100)}%`);
-const ms = (value) => (value === null || value === undefined ? "–" : `${value} ms`);
+const msText = (value) => (value === null || value === undefined ? "–" : `${value} ms`);
+const formatDate = (iso) => (iso ? new Date(iso).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "–");
 
-function heading(text) {
-  const h = document.createElement("h3");
-  h.textContent = text;
-  return h;
+function qualityPill(row) {
+  if (row.processing) return '<span class="pill plain">Processing…</span>';
+  if (row.pupil_detect_rate !== null && row.pupil_detect_rate !== undefined) {
+    const tone = row.pupil_detect_rate >= 0.5 ? "" : "warn";
+    return `<span class="pill ${tone}">Pupil ${percent(row.pupil_detect_rate)}</span>`;
+  }
+  if (row.has_trace) return '<span class="pill">Pupil data</span>';
+  if (row.has_video) return '<span class="pill plain">Video</span>';
+  return '<span class="pill plain">No video</span>';
 }
 
-function scoreTiles(summary) {
+let selectedSubject = null;
+let sessionsTimer = null;
+
+async function loadSessions() {
+  clearTimeout(sessionsTimer);
+  let data;
+  try {
+    data = await api("/api/sessions");
+  } catch (error) {
+    $("sessions-list").innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+    return;
+  }
+  $("data-folder").textContent = data.logs_dir;
+  const list = $("sessions-list");
+  if (!data.sessions.length) {
+    list.innerHTML = '<div class="empty">No sessions recorded yet.</div>';
+    return;
+  }
+  list.replaceChildren(
+    ...data.sessions.map((row) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `srow${row.subject_id === selectedSubject ? " sel" : ""}`;
+      button.dataset.subject = row.subject_id;
+      const when = row.source === "psychopy" ? "PsychoPy run" : formatDate(row.started_at);
+      const extra = [when, row.device, row.aborted ? "stopped early" : null].filter(Boolean).join(" · ");
+      button.innerHTML = `
+        <b>${escapeHtml(row.subject_id)}${row.session ? ` · session ${escapeHtml(row.session)}` : ""}</b>
+        ${qualityPill(row)}
+        <span class="sub">${escapeHtml(extra)}</span>`;
+      button.addEventListener("click", () => openSession(row.subject_id));
+      return button;
+    })
+  );
+  if (data.sessions.some((row) => row.processing) && !$("view-results").hidden) {
+    sessionsTimer = setTimeout(loadSessions, 3000);
+  }
+}
+
+function tile(taskId, label, value, sub) {
+  const task = TASKS.find((t) => t.id === taskId);
+  return `
+    <div class="mtile">
+      <span class="label"><span class="ticon ${task.tone}">${taskIcon(taskId)}</span>${escapeHtml(label)}</span>
+      <span class="value">${escapeHtml(value ?? "–")}</span>
+      <span class="sub">${escapeHtml(sub)}</span>
+    </div>`;
+}
+
+function scoreTiles(summary, files) {
   const tiles = [];
   if (summary.nback) {
     const n = summary.nback;
-    tiles.push(
-      tile("N-back accuracy", percent(n.accuracy), `${n.trials} trials`),
-      tile("N-back hit rate", percent(n.hit_rate), `${n.targets} targets`),
-      tile("N-back false alarms", percent(n.false_alarm_rate)),
-      tile("N-back hit RT", ms(n.mean_hit_rt_ms))
-    );
+    tiles.push(tile("nback", "Letter Match", percent(n.accuracy), `hit rate ${percent(n.hit_rate)} · false alarms ${percent(n.false_alarm_rate)}`));
   }
   if (summary.digitspan) {
     const d = summary.digitspan;
-    tiles.push(
-      tile("Digit span forward", d.forward_span, "longest correct"),
-      tile("Digit span backward", d.backward_span, "longest correct")
-    );
+    tiles.push(tile("digitspan", "Number Recall", `${d.forward_span} / ${d.backward_span}`, "forward / reverse span"));
   }
   if (summary.stroop) {
     const s = summary.stroop;
+    const sign = s.interference_ms > 0 ? "+" : "";
     tiles.push(
-      tile("Stroop accuracy", percent(s.accuracy), `${s.missed} missed of ${s.trials}`),
-      tile("Stroop interference", ms(s.interference_ms), `incongruent ${ms(s.incongruent_rt_ms)} vs congruent ${ms(s.congruent_rt_ms)}`)
+      tile("stroop", "Color Clash", s.interference_ms === null ? "–" : `${sign}${s.interference_ms} ms`, `slower on clashing words · ${percent(s.accuracy)} correct`)
     );
   }
-  const grid = document.createElement("div");
-  grid.className = "tiles";
-  grid.append(...tiles);
-  return tiles.length ? grid : document.createTextNode("No task results saved.");
+  if (files["_fluency_audio.webm"] || files["_fluency_audio.mp4"]) {
+    tiles.push(tile("fluency", "Animal Sprint", "Audio saved", "count the animals from the recording"));
+  }
+  return tiles.length ? `<div class="tiles">${tiles.join("")}</div>` : '<p class="hint">No task results saved.</p>';
 }
 
-function sessionNotes(meta) {
-  const lines = [];
-  if (meta.started_at) lines.push(`Started ${formatDate(meta.started_at)}`);
-  if (meta.notes) lines.push(`Notes: ${meta.notes}`);
-  if (meta.aborted) lines.push("Session was aborted; only completed tasks were saved.");
-  if (meta.webcam) {
-    const fps = meta.webcam.mean_fps ? `${meta.webcam.mean_fps.toFixed(1)} fps` : "–";
-    lines.push(`Webcam: ${meta.webcam.frames} frames over ${meta.webcam.duration_s.toFixed(0)} s (${fps})`);
+function metaLine(meta) {
+  const parts = [];
+  if (meta.started_at) parts.push(`Started ${formatDate(meta.started_at)}`);
+  if (meta.device?.kind) parts.push(meta.device.kind);
+  if (meta.webcam?.frames) {
+    const fps = meta.webcam.mean_fps ? `${meta.webcam.mean_fps.toFixed(1)} fps` : "";
+    const size = meta.webcam.frame_size ? `${meta.webcam.frame_size.join("×")}` : "";
+    parts.push(`Video ${[size, fps].filter(Boolean).join(", ")}, ${Math.round(meta.webcam.duration_s)} s`);
   }
-  if (meta.clock_sync_start) {
-    let text = `Clock sync: ±${(meta.clock_sync_start.rtt_ms / 2).toFixed(1)} ms`;
-    if (meta.clock_sync_end) {
-      const drift = (meta.clock_sync_end.offset_s - meta.clock_sync_start.offset_s) * 1000;
-      text += `, drift over session ${drift.toFixed(1)} ms`;
-    }
-    lines.push(text);
-  }
-  const p = document.createElement("p");
-  p.className = "hint";
-  p.textContent = lines.join(" · ");
-  return p;
+  if (meta.practice?.length) parts.push(`${meta.practice.length} practice round${meta.practice.length > 1 ? "s" : ""}`);
+  if (meta.aborted) parts.push("Stopped early; finished tasks were saved");
+  if (meta.notes) parts.push(`Notes: ${meta.notes}`);
+  return parts.map(escapeHtml).join(" · ");
 }
 
 function fileLinks(subjectId, files) {
-  const wrap = document.createElement("div");
-  wrap.className = "file-links";
-  for (const [suffix, present] of Object.entries(files)) {
-    if (!present) continue;
-    const a = document.createElement("a");
-    a.href = `/files/${encodeURIComponent(subjectId + suffix)}`;
-    a.textContent = subjectId + suffix;
-    wrap.append(a);
-  }
-  return wrap;
+  return Object.entries(files)
+    .filter(([, present]) => present)
+    .map(([suffix]) => `<a href="/files/${encodeURIComponent(subjectId + suffix)}">${escapeHtml(subjectId + suffix)}</a>`)
+    .join("");
 }
 
 let pollTimer = null;
 
 async function openSession(subjectId) {
   clearTimeout(pollTimer);
-  for (const tr of $("sessions-table").querySelectorAll("tbody tr")) {
-    tr.classList.toggle("selected", tr.dataset.subject === subjectId);
-  }
+  selectedSubject = subjectId;
+  for (const row of document.querySelectorAll(".srow")) row.classList.toggle("sel", row.dataset.subject === subjectId);
   const detail = $("session-detail");
-  detail.hidden = false;
   let data;
   try {
     data = await api(`/api/sessions/${encodeURIComponent(subjectId)}`);
   } catch (error) {
-    detail.replaceChildren(error.message);
+    detail.innerHTML = `<div class="card">${escapeHtml(error.message)}</div>`;
     return;
   }
-  const title = document.createElement("h2");
-  title.textContent = `${subjectId}${data.meta.session ? ` · session ${data.meta.session}` : ""}`;
-  const analysis = document.createElement("div");
-  detail.replaceChildren(
-    title,
-    sessionNotes(data.meta),
-    heading("Task scores"),
-    scoreTiles(data.summary),
-    heading("Pupil data"),
-    analysis,
-    heading("Files"),
-    fileLinks(subjectId, data.files)
-  );
-  renderAnalysis(analysis, subjectId, data);
+  const meta = data.meta || {};
+  detail.innerHTML = `
+    <div class="detail-head">
+      <h2>${escapeHtml(subjectId)}${meta.session ? ` · session ${escapeHtml(meta.session)}` : ""}</h2>
+    </div>
+    <p class="meta-line">${metaLine(meta)}</p>
+    ${scoreTiles(data.summary, data.files)}
+    <section class="card">
+      <div class="analysis-row">
+        <h3 class="h2">Pupil size over the session</h3>
+        <button class="btn btn-ghost btn-small" type="button" id="analyze" hidden></button>
+      </div>
+      <div class="progress" id="job-bar" hidden><i></i></div>
+      <p class="status-line" id="job-status"></p>
+      <div id="chart-wrap"></div>
+    </section>
+    <section class="card">
+      <h3 class="h2">Files</h3>
+      <div class="file-links">${fileLinks(subjectId, data.files)}</div>
+    </section>`;
+  renderAnalysis(subjectId, data);
 }
 
-function renderAnalysis(container, subjectId, data) {
-  const hasVideo = data.files["_webcam.mp4"] && data.files["_webcam_frame_timestamps.csv"];
-  const hasTrace = data.files["_pupil_trace.csv"];
+function renderAnalysis(subjectId, data) {
+  const files = data.files;
+  const hasRaw = files["_webcam_raw.webm"] || files["_webcam_raw.mp4"];
+  const hasVideo = hasRaw || (files["_webcam.mp4"] && files["_webcam_frame_timestamps.csv"]);
+  const hasTrace = files["_pupil_trace.csv"];
+  const button = $("analyze");
+  const status = $("job-status");
+  const bar = $("job-bar");
   if (!hasVideo && !hasTrace) {
-    const note = document.createElement("p");
-    note.className = "hint";
-    note.textContent = "No webcam recording for this session.";
-    container.replaceChildren(note);
+    status.textContent = "No webcam recording for this session.";
     return;
   }
-  const button = document.createElement("button");
-  button.className = "secondary";
   button.hidden = !hasVideo;
-  button.textContent = hasTrace ? "Re-run pupil extraction" : "Extract pupil data from video";
-  const status = document.createElement("p");
-  status.className = "hint";
-  const bar = document.createElement("div");
-  bar.className = "progress-bar";
-  bar.hidden = true;
-  bar.append(document.createElement("div"));
-  const chartWrap = document.createElement("div");
-  container.replaceChildren(button, bar, status, chartWrap);
-
+  button.textContent = hasTrace ? "Run pupil analysis again" : "Run pupil analysis";
   if (data.trial_counts) {
-    const counts = Object.entries(data.trial_counts).map(([task, n]) => `${task} ${n}`).join(", ");
+    const names = { nback: "Letter Match", digit_span: "Number Recall", stroop: "Color Clash" };
+    const counts = Object.entries(data.trial_counts).map(([task, n]) => `${names[task] || task} ${n}`).join(", ");
     status.textContent = `Trials matched to pupil samples: ${counts}.`;
+  } else if (!hasTrace) {
+    status.textContent = "The pupil analysis hasn't run yet.";
   }
 
   const poll = async () => {
     const job = await api(`/api/sessions/${encodeURIComponent(subjectId)}/job`).catch(() => null);
-    if (!job) return;
-    bar.hidden = job.state !== "running";
-    bar.firstChild.style.width = `${Math.round((job.progress || 0) * 100)}%`;
-    status.textContent = job.state === "running"
-      ? `${job.message}… ${Math.round((job.progress || 0) * 100)}%`
-      : job.message;
-    status.className = job.state === "error" ? "error" : "hint";
-    if (job.state === "running") pollTimer = setTimeout(poll, 500);
-    else {
-      button.disabled = false;
-      if (job.state === "done") {
-        await loadSessions();
-        await openSession(subjectId);
-      }
+    if (!job || selectedSubject !== subjectId) return;
+    const running = job.state === "running";
+    bar.hidden = !running;
+    bar.firstElementChild.style.width = `${Math.round((job.progress || 0) * 100)}%`;
+    status.textContent = running ? `${job.message}… ${Math.round((job.progress || 0) * 100)}%` : job.message;
+    status.classList.toggle("error", job.state === "error");
+    button.disabled = running;
+    if (running) pollTimer = setTimeout(poll, 700);
+    else if (job.state === "done") {
+      await loadSessions();
+      await openSession(subjectId);
     }
   };
 
@@ -529,7 +858,7 @@ function renderAnalysis(container, subjectId, data) {
       poll();
     } catch (error) {
       status.textContent = error.message;
-      status.className = "error";
+      status.classList.add("error");
       button.disabled = false;
     }
   });
@@ -537,12 +866,19 @@ function renderAnalysis(container, subjectId, data) {
   if (data.job?.state === "running") {
     button.disabled = true;
     poll();
+  } else if (data.job?.state === "error") {
+    status.textContent = data.job.message;
+    status.classList.add("error");
   }
   if (hasTrace) {
     api(`/api/sessions/${encodeURIComponent(subjectId)}/trace`)
-      .then((trace) => renderTraceChart(chartWrap, trace))
-      .catch((error) => (chartWrap.textContent = error.message));
+      .then((trace) => renderTraceChart($("chart-wrap"), trace))
+      .catch((error) => ($("chart-wrap").textContent = error.message));
   }
 }
 
+renderTaskList();
+renderSettings();
+renderDeviceChips();
+loadInfo();
 showView("setup");
