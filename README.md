@@ -42,38 +42,7 @@ per-trial pupil table. Details, output files and timing accuracy are in [`docs/a
 5. [`docs/app.md`](docs/app.md), then [`src/pupilad/app/`](src/pupilad/app/): how the task battery
    app works and the code behind it.
 
-### Finding a specific thing
 
-| Looking for | Go to |
-|---|---|
-| Main findings | `results/literature_comparison.md` |
-| A specific statistic | `results/ds003838/stats.json` |
-| Time courses of dilation by load | `results/ds003838/fig1_load_dilation.png` |
-| Split-half reliability and overload | `results/ds003838/fig2_reliability_overload.png` |
-| Load slope and NASA-TLX | `results/ds003838/fig3_load_slope_tlx.png` |
-| Preprocessing and feature parameters | Named constants in `src/pupilad/ds003838/preprocess.py` and `features.py`; explained in `docs/methods_ds003838.md` |
-| Participant inclusion rules | `mark_inclusion` in `src/pupilad/ds003838/features.py` |
-| Statistical tests | `src/pupilad/ds003838/validate.py`, using helpers from `src/pupilad/stats.py` |
-| Published values used for comparison | `src/pupilad/validation/benchmarks.py` |
-| Tasks shown to participants | `src/pupilad/app/static/battery.js` (app) and `scripts/run_task_battery.py` (older PsychoPy version) |
-| Task scoring | `src/pupilad/app/scoring.py` |
-| How pupil size is found in video | `src/pupilad/webcam/pupil_detector.py` |
-| App output files, timing and consent notes | `docs/app.md` |
-| Risk tiers and LSTM definition | `src/pupilad/model/lstm.py` (not clinically validated) |
-| All command names | `COMMANDS` in `src/pupilad/__main__.py` |
-| All data and result paths | `src/pupilad/paths.py` |
-
-### How the ds003838 analysis fits together
-
-Each step reads the output of the step before it. Everything under `data/` is created on your
-machine and is not on GitHub.
-
-| Command | Code in `src/pupilad/ds003838/` | Writes to |
-|---|---|---|
-| `make download` | `download.py` | `data/ds003838/raw/`, `data/ds003838/slim/` |
-| `make preprocess` | `preprocess.py` (with `events.py`, `loaders.py`, `../signal.py`) | `data/ds003838/derived/trials/` |
-| `make features` | `features.py` | `data/ds003838/derived/*.csv` |
-| `make validate` | `validate.py`, `figures.py` (with `../stats.py`) | `results/ds003838/` |
 
 ### File map
 
