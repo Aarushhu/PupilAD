@@ -252,7 +252,10 @@ def test_audio_upload_is_saved_with_its_extension(client):
 def test_camera_check_reports_no_face_on_blank_frame(client):
     ok, jpeg = cv2.imencode(".jpg", np.full((240, 320, 3), 128, dtype=np.uint8))
     result = client.post("/api/camera/check", data=jpeg.tobytes()).json
-    assert result == {"width": 320, "height": 240, "face": None, "eyes": 0, "pupil_px": None}
+    assert (result["width"], result["height"]) == (320, 240)
+    assert result["faces"] == 0
+    assert result["face"] is None and result["pupil_px"] is None
+    assert result["frame_brightness"] == pytest.approx(128, abs=1)
     assert client.post("/api/camera/check", data=b"not an image").status_code == 400
 
 

@@ -140,6 +140,35 @@ code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-siz
 .check.ok .dot { background: var(--good-soft); color: var(--good); }
 .check.warn .dot { background: var(--accent-soft); color: var(--warn); }
 .check small { color: var(--muted); font-size: 12.5px; display: block; }
+.camview .eyeline { stroke: #F3F5F7; stroke-width: 2; stroke-dasharray: 4 6; opacity: .8; }
+.camview .eyeline.ok { stroke: var(--ink-green); opacity: 1; }
+.camview .eyeline-label { fill: #F3F5F7; font-size: 12px; font-weight: 650; font-family: inherit; paint-order: stroke; stroke: rgba(19, 34, 53, .7); stroke-width: 3px; }.camview .hint { font-size: 15px; font-weight: 550; }
+.tips { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+.tip { display: flex; gap: 12px; align-items: center; background: var(--card, #fff); border: 1px solid var(--line, #E3E8EE); border-radius: 14px; padding: 12px 14px; }
+.tip .ticon { width: 38px; height: 38px; border-radius: 10px; }
+.tip .ticon svg { width: 20px; height: 20px; }
+.tip b { display: block; font-size: 14px; }
+.tip small { display: block; color: var(--muted); font-size: 12.5px; line-height: 1.35; margin-top: 2px; }
+@media (max-width: 700px) {
+  .tips { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .tip { padding: 10px; gap: 8px; }
+  .tip .ticon { width: 30px; height: 30px; }
+  .tip .ticon svg { width: 17px; height: 17px; }
+  .tip b { font-size: 13px; }
+  .tip small { display: none; }
+}
+.setup-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.setup-step { display: grid; grid-template-columns: 28px 1fr; gap: 10px; align-items: start; padding: 8px 10px; border-radius: 12px; font-size: 14.5px; }
+.setup-step .dot { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--paper); color: var(--muted); font-size: 13px; font-weight: 650; }
+.setup-step .dot svg { width: 16px; height: 16px; }
+.setup-step.ok .dot { background: var(--good-soft); color: var(--good); }
+.setup-step.warn .dot { background: var(--accent); color: #fff; font-size: 16px; font-weight: 800; }
+.setup-step b { font-weight: 600; }
+.setup-step small { color: var(--muted); font-size: 12.5px; display: block; }
+.setup-step.current { background: var(--accent-soft); }
+.setup-step.current small { color: #6B3405; font-size: 13.5px; font-weight: 550; margin-top: 2px; }
+.meter.thresholded { position: relative; overflow: visible; }
+.meter .mark { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--ink, #132235); border-radius: 1px; }
 .meter-block, .mic-check { display: grid; gap: 6px; }
 .meter-row { display: flex; justify-content: space-between; font-size: 14px; }
 .meter-row b { font-variant-numeric: tabular-nums; }

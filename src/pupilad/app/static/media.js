@@ -185,32 +185,3 @@ export function grabFrame(video, canvas, maxWidth = 640) {
   context.drawImage(video, 0, 0, canvas.width, canvas.height);
   return context;
 }
-
-export function regionBrightness(context, box) {
-  const { width, height } = context.canvas;
-  const x = Math.max(0, Math.round(box.x * width));
-  const y = Math.max(0, Math.round(box.y * height));
-  const w = Math.max(2, Math.min(width - x, Math.round(box.w * width)));
-  const h = Math.max(1, Math.min(height - y, Math.round(box.h * height)));
-  const pixels = context.getImageData(x, y, w, h).data;
-  let left = 0;
-  let right = 0;
-  let leftCount = 0;
-  let rightCount = 0;
-  for (let row = 0; row < h; row += 2) {
-    for (let col = 0; col < w; col += 2) {
-      const i = (row * w + col) * 4;
-      const luma = 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
-      if (col < w / 2) {
-        left += luma;
-        leftCount++;
-      } else {
-        right += luma;
-        rightCount++;
-      }
-    }
-  }
-  left /= leftCount || 1;
-  right /= rightCount || 1;
-  return { mean: (left + right) / 2, left, right };
-}

@@ -36,10 +36,23 @@ link is shown on the New session page of the computer running the app.
    data, tick "Replace the existing files" or choose a new ID. Switch tasks on or off; change
    timings under "Advanced settings". Settings are remembered in the browser and saved with each
    session.
-2. **Camera check.** The participant lines their face up with the oval. The page checks that the
-   face is centred, eyes are found, lighting is even and the distance is right, and shows how
-   often a pupil is found (aim for 50% or more). The microphone level is checked if Animal Sprint
-   is on.
+2. **Camera setup.** Tips at the top cover light in front, camera at eye level, sitting close and
+   being alone in view. A checklist then guides the participant through five steps, showing one
+   instruction at a time:
+
+   | Step | Passes when |
+   | --- | --- |
+   | Only you in view | exactly one face is detected |
+   | Lighting | face brightness 70–215, the background is no more than 45 levels brighter than the face (no backlight), and the two halves of the face differ by under 35% |
+   | Camera height | the eyes are between 28% and 56% of the way down the picture (the dotted "eyes" line), with the face roughly centred |
+   | Distance | the face fills 28–60% of the picture's width |
+   | Eyes clear | eyes are found, have enough contrast, and a pupil is detected |
+
+   **Continue** stays locked until the first four steps pass and the pupil is found in at least
+   50% of the last 12 checks (about 8 s) for 3 checks in a row. Change the 50% under Advanced
+   settings ("Camera setup: pupil found (%) needed to start"); 0 turns the pupil requirement off.
+   The last check's values are saved in `session.json` under `device.setup_check`. The microphone
+   level is also shown if Animal Sprint is on.
 3. **Session map.** Shows the tasks and the estimated time. Pressing Start enters full screen,
    keeps the screen awake and starts recording.
 4. **Each task** opens with an instruction card. The participant can do a short practice round
@@ -69,6 +82,23 @@ Keyboard hints only appear on devices with a mouse.
 During measured trials the screen is a constant mid-grey (#4B5563) with no colour flashes or
 feedback, so screen brightness doesn't change pupil size. Coloured backgrounds appear only on
 instruction, break and results screens, which are outside the task markers.
+
+### How the pupil is found
+
+For each video frame (`webcam/pupil_detector.py`):
+
+1. Find faces and keep only the **largest**, so someone in the background is ignored.
+2. Find up to two eyes in the upper part of that face.
+3. In the middle of each eye box, blur slightly and find the darkest spot. If the eye has too
+   little contrast (median minus darkest under 12 grey levels), report no pupil.
+4. Mark pixels darker than *darkest + 30% of (median − darkest)* and take the connected dark
+   region around the darkest spot. Reject it if it's tiny, covers more than 30% of the eye box,
+   or is too elongated (over 2.2:1). Its equivalent-circle diameter is the pupil size in pixels.
+
+The threshold adapts to each eye's own brightness. The earlier fixed threshold (grey level 30)
+found almost nothing on ordinary webcams. On an ordinary (visible-light) webcam, dark irises and
+pupils look similar, so the measured dark region can include part of the iris. Pixel sizes also
+depend on distance from the camera, so compare them within a session only.
 
 ## Output
 

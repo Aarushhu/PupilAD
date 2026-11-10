@@ -8,7 +8,6 @@ import {
   mediaSupport,
   openCamera,
   openMicrophone,
-  regionBrightness,
   stopStream,
 } from "./media.js";
 
@@ -262,77 +261,126 @@ $("camera-select").addEventListener("change", async (event) => {
   await startCameraCheck();
 });
 
-function renderChecks(items) {
-  $("cam-checks").innerHTML = items
-    .map(({ state, title, detail }) => {
-      const icon = state === "ok" ? ICON_OK : state === "warn" ? ICON_WARN : ICON_WAIT;
-      return `<div class="check ${state}"><span class="dot">${icon}</span><div>${title}<small>${detail}</small></div></div>`;
-    })
-    .join("");
+const SETUP_STEPS = [
+  { id: "people", title: "Only you in view" },
+  { id: "light", title: "Lighting" },
+  { id: "height", title: "Camera height" },
+  { id: "distance", title: "Distance" },
+  { id: "eyes", title: "Eyes clear" },
+];
+const SETUP_HISTORY = 12;
+const SETUP_MIN_CHECKS = 6;
+const READY_STREAK = 3;
+
+function renderChecks(states) {
+  const current = SETUP_STEPS.find((step) => states[step.id]?.state === "warn")?.id;
+  $("cam-checks").innerHTML = SETUP_STEPS.map((step, index) => {
+    const { state = "wait", detail = "" } = states[step.id] || {};
+    const icon = state === "ok" ? ICON_OK : state === "warn" ? "!" : `${index + 1}`;
+    const classes = ["setup-step", state, step.id === current ? "current" : ""].join(" ");
+    return `<li class="${classes}"><span class="dot">${icon}</span><div><b>${step.title}</b><small>${escapeHtml(detail)}</small></div></li>`;
+  }).join("");
 }
 
-function evaluateFrame(result, brightness) {
+function evaluateFrame(result) {
   const face = result.face;
-  const checks = [];
-  let tip = null;
+  const states = {};
+  const tips = {};
+  const waiting = { state: "wait", detail: "Waiting for your face" };
   if (!face) {
-    checks.push({ state: "warn", title: "Face centred", detail: "No face found yet" });
-    tip = "Move so your whole face is inside the oval, looking at the screen.";
+    states.people = { state: "warn", detail: "No face found yet" };
+    tips.people = "Sit in front of the camera so your whole face is inside the oval.";
+    return { states, tip: tips.people, steady: false };
+  }
+  if (result.faces > 1) {
+    states.people = { state: "warn", detail: `${result.faces} faces in the picture` };
+    tips.people = "Only the participant should be in the picture. Ask anyone else to step out of view.";
   } else {
-    const cx = face.x + face.w / 2;
-    const cy = face.y + face.h / 2;
-    const centred = cx > 0.32 && cx < 0.68 && cy > 0.25 && cy < 0.7;
-    checks.push({ state: centred ? "ok" : "warn", title: "Face centred", detail: centred ? "Inside the oval" : "Move toward the middle" });
-    if (!centred) tip ??= "Move your face toward the middle of the oval.";
+    states.people = { state: "ok", detail: "Just you" };
   }
-  const eyesOk = result.eyes >= 2 || result.pupil_px !== null;
-  checks.push({
-    state: !face ? "wait" : eyesOk ? "ok" : "warn",
-    title: "Eyes found",
-    detail: !face ? "Waiting for a face" : eyesOk ? "No glare on glasses" : "Look straight at the screen",
-  });
-  if (face && !eyesOk) tip ??= "Look straight at the screen. If you wear glasses, tilt them slightly to remove glare.";
-  let lightState = "wait";
-  let lightDetail = "Waiting for a face";
-  if (face && brightness) {
-    const unevenness = Math.abs(brightness.left - brightness.right) / Math.max(1, brightness.mean);
-    if (brightness.mean < 70) {
-      lightState = "warn";
-      lightDetail = "Too dark";
-      tip ??= "It's a little dark. Turn on a light or face a window.";
-    } else if (brightness.mean > 215) {
-      lightState = "warn";
-      lightDetail = "Too bright";
-      tip ??= "Too much light on your face. Move away from a bright lamp or window.";
-    } else if (unevenness > 0.35) {
-      lightState = "warn";
-      lightDetail = "One side is in shadow";
-      tip ??= "One side of your face is in shadow. Face the light more evenly.";
-    } else {
-      lightState = "ok";
-      lightDetail = "Even light";
-    }
+
+  const faceLight = result.face_brightness ?? 0;
+  const backLight = result.background_brightness ?? 0;
+  const sides = Math.abs((result.face_left_brightness ?? 0) - (result.face_right_brightness ?? 0)) / Math.max(1, faceLight);
+  if (faceLight < 70) {
+    states.light = { state: "warn", detail: "Your face is too dark" };
+    tips.light = "Your face is too dark. Turn on a light in front of you, or face a window.";
+  } else if (backLight - faceLight > 45) {
+    states.light = { state: "warn", detail: "Bright light behind you" };
+    tips.light = "There's bright light behind you. Turn so the window or lamp is in front of you, or close the blinds behind you.";
+  } else if (faceLight > 215) {
+    states.light = { state: "warn", detail: "Too bright" };
+    tips.light = "Too much light on your face. Move the lamp further away or step back from the window.";
+  } else if (sides > 0.35) {
+    states.light = { state: "warn", detail: "One side is in shadow" };
+    tips.light = "One side of your face is in shadow. Turn to face the light straight on.";
+  } else {
+    states.light = { state: "ok", detail: "Light on your face" };
   }
-  checks.push({ state: lightState, title: "Lighting", detail: lightDetail });
-  let distanceState = "wait";
-  let distanceDetail = "Waiting for a face";
-  if (face) {
-    if (face.w < 0.2) {
-      distanceState = "warn";
-      distanceDetail = "Too far away";
-      tip ??= "Move a little closer to the camera.";
-    } else if (face.w > 0.6) {
-      distanceState = "warn";
-      distanceDetail = "Too close";
-      tip ??= "Move back a little.";
-    } else {
-      distanceState = "ok";
-      distanceDetail = "Good distance";
-    }
+
+  const centerX = face.x + face.w / 2;
+  const eyeY = result.eye_y ?? face.y + face.h * 0.4;
+  if (eyeY < 0.28) {
+    states.height = { state: "warn", detail: "Camera is too low" };
+    tips.height = "The camera is below your eyes. Raise it to eye level (put the laptop on a few books) or tilt it up a little.";
+  } else if (eyeY > 0.56) {
+    states.height = { state: "warn", detail: "Camera is too high" };
+    tips.height = "The camera is above your eyes. Lower it or tilt it down a little, so your eyes are on the dotted line.";
+  } else if (centerX < 0.3 || centerX > 0.7) {
+    states.height = { state: "warn", detail: "Move to the middle" };
+    tips.height = "Move sideways so your face is in the middle of the oval.";
+  } else {
+    states.height = { state: "ok", detail: "Eyes on the line" };
   }
-  checks.push({ state: distanceState, title: "Distance", detail: distanceDetail });
-  const aligned = checks[0].state === "ok" && distanceState === "ok";
-  return { checks, tip, aligned };
+
+  if (face.w < 0.28) {
+    states.distance = { state: "warn", detail: "Too far away" };
+    tips.distance = "Move closer to the camera until your face fills the oval.";
+  } else if (face.w > 0.6) {
+    states.distance = { state: "warn", detail: "Too close" };
+    tips.distance = "Move back a little.";
+  } else {
+    states.distance = { state: "ok", detail: "Good distance" };
+  }
+
+  if (result.eyes === 0) {
+    states.eyes = { state: "warn", detail: "Eyes not found" };
+    tips.eyes = "Look straight at the screen. If you wear glasses, tilt them slightly to stop the glare, or take them off.";
+  } else if ((result.eye_contrast ?? 0) < 12) {
+    states.eyes = { state: "warn", detail: "Eyes look dim or blurry" };
+    tips.eyes = "Your eyes look dim. Add light in front of you and keep still.";
+  } else if (result.pupil_px === null) {
+    states.eyes = { state: "warn", detail: "Pupil not clear yet" };
+    tips.eyes = "Hold still, open your eyes normally and look at the middle of the screen.";
+  } else {
+    states.eyes = { state: "ok", detail: "Pupil visible" };
+  }
+
+  for (const step of SETUP_STEPS) states[step.id] ??= waiting;
+  const firstProblem = SETUP_STEPS.find((step) => states[step.id].state === "warn");
+  const steady = SETUP_STEPS.slice(0, 4).every((step) => states[step.id].state === "ok");
+  return { states, tip: firstProblem ? tips[firstProblem.id] : null, steady };
+}
+
+function minPupilRate() {
+  const value = Number(settings.minPupilPercent);
+  return Number.isFinite(value) ? Math.min(100, Math.max(0, value)) / 100 : 0.5;
+}
+
+function updateSetupGate(rate, steady) {
+  const needed = minPupilRate();
+  const enough = camera.history.length >= Math.min(SETUP_MIN_CHECKS, SETUP_HISTORY);
+  const ready = steady && enough && rate >= needed;
+  camera.readyStreak = ready ? camera.readyStreak + 1 : 0;
+  const button = $("cam-continue");
+  if (camera.readyStreak >= READY_STREAK) {
+    button.disabled = false;
+    button.textContent = "Looks good, continue";
+  } else if (!camera.passedOnce) {
+    button.disabled = true;
+    button.textContent = "Finish the steps to continue";
+  }
+  if (camera.readyStreak >= READY_STREAK) camera.passedOnce = true;
 }
 
 async function runCheck() {
@@ -340,23 +388,26 @@ async function runCheck() {
   if (camera.busy || !video.videoWidth) return;
   camera.busy = true;
   try {
-    const context = grabFrame(video, camera.canvas);
-    const blob = await new Promise((resolve) => camera.canvas.toBlob(resolve, "image/jpeg", 0.85));
+    grabFrame(video, camera.canvas, 1280);
+    const blob = await new Promise((resolve) => camera.canvas.toBlob(resolve, "image/jpeg", 0.9));
     const response = await fetch("/api/camera/check", { method: "POST", body: blob });
     if (!response.ok) return;
     const result = await response.json();
-    const brightness = result.face ? regionBrightness(context, result.face) : null;
-    const { checks, tip, aligned } = evaluateFrame(result, brightness);
-    camera.history.push(result.pupil_px !== null);
-    if (camera.history.length > 12) camera.history.shift();
+    const { states, tip, steady } = evaluateFrame(result);
+    camera.history.push(steady && result.pupil_px !== null);
+    if (camera.history.length > SETUP_HISTORY) camera.history.shift();
     const rate = camera.history.filter(Boolean).length / camera.history.length;
-    renderChecks(checks);
+    renderChecks(states);
+    const needed = minPupilRate();
     $("pupil-rate").textContent = `${Math.round(rate * 100)}%`;
     $("pupil-meter").style.width = `${Math.round(rate * 100)}%`;
-    $("pupil-meter").style.background = rate >= 0.5 ? "var(--brand)" : "var(--accent)";
-    $("oval").classList.toggle("ok", aligned);
+    $("pupil-meter").style.background = rate >= needed ? "var(--brand)" : "var(--accent)";
+    $("oval").classList.toggle("ok", states.height?.state === "ok" && states.distance?.state === "ok");
+    $("eyeline").classList.toggle("ok", states.height?.state === "ok");
     $("cam-hint").hidden = !tip;
     $("cam-hint").textContent = tip || "";
+    camera.lastResult = result;
+    updateSetupGate(rate, steady);
   } catch {
   } finally {
     camera.busy = false;
@@ -375,15 +426,21 @@ async function startCameraCheck() {
   showCameraError("");
   const button = $("cam-continue");
   button.disabled = true;
-  button.textContent = "Looks good, continue";
+  button.textContent = "Finish the steps to continue";
   camera.usable = false;
   camera.history = [];
-  renderChecks([
-    { state: "wait", title: "Face centred", detail: "Starting the camera" },
-    { state: "wait", title: "Eyes found", detail: "" },
-    { state: "wait", title: "Lighting", detail: "" },
-    { state: "wait", title: "Distance", detail: "" },
-  ]);
+  camera.readyStreak = 0;
+  camera.passedOnce = false;
+  camera.lastResult = null;
+  renderChecks({ people: { state: "wait", detail: "Starting the camera" } });
+  const needed = Math.round(minPupilRate() * 100);
+  $("pupil-mark").style.left = `${needed}%`;
+  $("pupil-mark").hidden = needed === 0;
+  $("pupil-goal").textContent = needed
+    ? `Needs to reach ${needed}% (the line) before you can start.`
+    : "No minimum is set, so you can start once the other steps are green.";
+  $("pupil-rate").textContent = "–";
+  $("pupil-meter").style.width = "0%";
   const support = mediaSupport();
   if (!support.secure || !support.camera || !support.recorder) {
     showCameraError(
@@ -418,7 +475,6 @@ async function startCameraCheck() {
   video.srcObject = camera.stream;
   await video.play().catch(() => {});
   camera.usable = true;
-  button.disabled = false;
   populateCameraSelect();
   if (selectedTasks().includes("fluency") && !camera.microphone) {
     try {
@@ -578,6 +634,17 @@ async function startSession() {
       if (record) {
         const { deviceId, groupId, ...settings } = camera.stream.getVideoTracks()[0]?.getSettings() || {};
         device.camera = settings;
+        const last = camera.lastResult;
+        device.setup_check = {
+          pupil_found_rate: camera.history.length ? camera.history.filter(Boolean).length / camera.history.length : null,
+          required_rate: minPupilRate(),
+          faces: last?.faces ?? null,
+          face_width_fraction: last?.face ? Number(last.face.w.toFixed(3)) : null,
+          eye_width_px: last?.eye_width_px ?? null,
+          eye_contrast: last?.eye_contrast ?? null,
+          face_brightness: last?.face_brightness ?? null,
+          background_brightness: last?.background_brightness ?? null,
+        };
       }
       await api("/api/session/start", {
         subject_id: subjectId,

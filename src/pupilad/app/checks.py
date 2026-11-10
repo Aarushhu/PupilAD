@@ -2,17 +2,18 @@ import cv2
 import numpy as np
 
 from pupilad.webcam.pupil_detector import (
-    EYE_MIN_NEIGHBORS,
-    EYE_SCALE_FACTOR,
-    FACE_MIN_NEIGHBORS,
-    FACE_SCALE_FACTOR,
-    MIN_PUPIL_AREA_PX,
-    cascades,
+    detect_eyes,
+    detect_faces,
     equivalent_diameter,
-    largest_dark_blob_area,
+    eye_contrast,
+    pupil_area,
 )
 
 MIN_FACE_FRACTION = 0.12
+
+
+def brightness(gray):
+    return round(float(gray.mean()), 1) if gray.size else None
 
 
 def inspect_frame(jpeg_bytes):
@@ -21,15 +22,27 @@ def inspect_frame(jpeg_bytes):
         raise ValueError("Could not decode the image")
     height, width = frame.shape[:2]
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    face_cascade, eye_cascade = cascades()
     min_side = max(40, int(min(width, height) * MIN_FACE_FRACTION))
-    faces = face_cascade.detectMultiScale(
-        gray, FACE_SCALE_FACTOR, FACE_MIN_NEIGHBORS, minSize=(min_side, min_side)
-    )
-    result = {"width": width, "height": height, "face": None, "eyes": 0, "pupil_px": None}
-    if len(faces) == 0:
+    faces = detect_faces(gray, min_size=(min_side, min_side))
+    result = {
+        "width": width,
+        "height": height,
+        "faces": len(faces),
+        "face": None,
+        "eyes": 0,
+        "eye_y": None,
+        "eye_width_px": None,
+        "eye_contrast": None,
+        "pupil_px": None,
+        "frame_brightness": brightness(gray),
+        "face_brightness": None,
+        "background_brightness": None,
+        "face_left_brightness": None,
+        "face_right_brightness": None,
+    }
+    if not faces:
         return result
-    face_x, face_y, face_w, face_h = max(faces, key=lambda box: box[2] * box[3])
+    face_x, face_y, face_w, face_h = faces[0]
     result["face"] = {
         "x": face_x / width,
         "y": face_y / height,
@@ -37,14 +50,30 @@ def inspect_frame(jpeg_bytes):
         "h": face_h / height,
     }
     face = gray[face_y : face_y + face_h, face_x : face_x + face_w]
-    eyes = eye_cascade.detectMultiScale(face, EYE_SCALE_FACTOR, EYE_MIN_NEIGHBORS)
-    eyes = [box for box in eyes if box[1] < face_h * 0.6]
+    background = np.ones(gray.shape, dtype=bool)
+    background[face_y : face_y + face_h, face_x : face_x + face_w] = False
+    result["face_brightness"] = brightness(face)
+    result["background_brightness"] = brightness(gray[background])
+    result["face_left_brightness"] = brightness(face[:, : face_w // 2])
+    result["face_right_brightness"] = brightness(face[:, face_w // 2 :])
+    eyes = detect_eyes(face)
     result["eyes"] = len(eyes)
+    if eyes:
+        centers = [face_y + eye_y + eye_h / 2 for _, eye_y, _, eye_h in eyes]
+        result["eye_y"] = round(float(np.mean(centers)) / height, 3)
+        result["eye_width_px"] = int(np.mean([eye_w for _, _, eye_w, _ in eyes]))
+    else:
+        result["eye_y"] = round((face_y + face_h * 0.4) / height, 3)
     diameters = []
+    contrasts = []
     for eye_x, eye_y, eye_w, eye_h in eyes:
-        area = largest_dark_blob_area(face[eye_y : eye_y + eye_h, eye_x : eye_x + eye_w])
-        if area > MIN_PUPIL_AREA_PX:
+        region = face[eye_y : eye_y + eye_h, eye_x : eye_x + eye_w]
+        contrasts.append(eye_contrast(region))
+        area = pupil_area(region)
+        if area > 0:
             diameters.append(equivalent_diameter(area))
+    if contrasts:
+        result["eye_contrast"] = round(float(np.mean(contrasts)), 1)
     if diameters:
         result["pupil_px"] = round(float(np.mean(diameters)), 2)
     return result

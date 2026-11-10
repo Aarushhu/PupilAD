@@ -17,6 +17,7 @@ export const DEFAULT_SETTINGS = {
   fluencyDurationS: 60,
   countdownS: 5,
   breakS: 15,
+  minPupilPercent: 50,
 };
 
 export const SETTING_LABELS = {
@@ -36,6 +37,7 @@ export const SETTING_LABELS = {
   fluencyDurationS: "Animal Sprint: duration (s)",
   countdownS: "Settle time before each task (s)",
   breakS: "Break between tasks (s)",
+  minPupilPercent: "Camera setup: pupil found (%) needed to start",
 };
 
 const ICONS = {
