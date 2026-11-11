@@ -15,6 +15,26 @@ same files.
 The app opens at <http://127.0.0.1:5050/>. Options: `--port`, `--logs_dir PATH`, `--no-browser`,
 `--lan`.
 
+## Portable pack (flash drive)
+
+`PupilAD-Pack` is a self-contained copy for 64-bit Windows: it carries its own Python 3.12 and
+packages, so it runs on any Windows PC without installing anything or going online. It is about
+230 MB unzipped. Copy the whole folder, then double-click `Start PupilAD.bat` or
+`Start PupilAD for phones and tablets.bat`. Sessions are saved in its `data` folder.
+
+Build or update it from this repository with `pack\build_pack.bat` (needs Python 3.11+ and
+internet the first time). By default it writes `..\PupilAD-Pack` next to the repository.
+
+- `pack\build_pack.bat` refreshes the code, and also downloads Python and packages only when they
+  are missing or `requirements-app.txt` changed, so routine updates take seconds.
+  `--out E:\PupilAD-Pack` builds straight onto a flash drive. The `data` folder is never touched.
+- `--rebuild` downloads Python and all packages again.
+- `--zip` also writes `PupilAD-Pack.zip`. `--publish` uploads that zip to the "PupilAD Pack
+  (latest)" GitHub release, replacing the previous one (needs the GitHub CLI, signed in).
+
+Each build runs a quick smoke test with the pack's own Python. `VERSION.txt` in the pack shows the
+code commit it was built from.
+
 ## Phones and tablets
 
 `--lan` (used by `start_app_phone.bat`) makes the app listen on the local network over HTTPS,
