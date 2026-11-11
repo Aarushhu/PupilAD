@@ -79,11 +79,25 @@ def ensure_runtime(pack, rebuild):
     marker.write_text(key, encoding="utf-8")
 
 
+def sync_tree(source, target):
+    ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
+    shutil.copytree(source, target, ignore=ignore, dirs_exist_ok=True)
+    wanted = {
+        path.relative_to(source)
+        for path in source.rglob("*")
+        if "__pycache__" not in path.parts and path.suffix != ".pyc"
+    }
+    for path in sorted(target.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        if path.relative_to(target) in wanted or "__pycache__" in path.parts:
+            continue
+        try:
+            path.rmdir() if path.is_dir() else path.unlink()
+        except OSError:
+            log(f"Could not remove old {path}; it is unused and can be deleted by hand")
+
+
 def copy_code(pack):
-    target = pack / "src" / "pupilad"
-    if target.exists():
-        shutil.rmtree(target)
-    shutil.copytree(REPO / "src" / "pupilad", target, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    sync_tree(REPO / "src" / "pupilad", pack / "src" / "pupilad")
     for item in PACK_FILES.iterdir():
         shutil.copy2(item, pack / item.name)
     (pack / "data").mkdir(exist_ok=True)
